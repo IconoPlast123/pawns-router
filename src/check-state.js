@@ -6,7 +6,10 @@ import path from "node:path";
 import { ROOT } from "./config.js";
 
 const SHAPE = {
-  top: ["mode", "updatedAt", "solUsd", "supply", "pawnUsd", "router", "fees", "pawns", "nextPawnSol", "history", "latest"],
+  top: ["mode", "updatedAt", "solUsd", "supply", "pawnUsd", "router", "fees", "pawns", "nextPawnSol", "history", "latest", "claim", "claims", "dev"],
+  claim: ["pendingSol", "minUsd", "maxWaitH", "lastAt", "checkedAt"],
+  claims: ["at", "sol", "tx"],
+  dev: ["address", "tokens", "checkedAt"],
   router: ["address", "sol"],
   fees: ["receivedSol", "buysSol", "networkSol", "devSol"],
   pawns: ["count", "tokens", "usd", "sold", "kept"],
@@ -74,6 +77,28 @@ else {
   });
 }
 
+// Claim rule and claim history.
+const msOrNull = (v) => v === null || (isNum(v) && v > 0);
+keys(S.claim, SHAPE.claim, "claim");
+nums(S.claim, ["pendingSol", "minUsd", "maxWaitH"], "claim");
+if (S.claim && (!msOrNull(S.claim.lastAt) || !msOrNull(S.claim.checkedAt))) fail("claim.lastAt et claim.checkedAt : une date en millisecondes, ou null.");
+if (!Array.isArray(S.claims)) fail("claims doit être une liste.");
+else {
+  if (S.claims.length > 10) fail(`claims contient ${S.claims.length} claims (10 au plus).`);
+  S.claims.forEach((c, i) => {
+    keys(c, SHAPE.claims, `claims[${i}]`);
+    nums(c, ["at", "sol"], `claims[${i}]`);
+    if (typeof c.tx !== "string") fail(`claims[${i}].tx doit être un texte.`);
+    if (i && c.at > S.claims[i - 1].at) fail(`claims[${i}] : du plus récent au plus ancien.`);
+  });
+  if (S.claim && (S.claims[0]?.at ?? null) !== S.claim.lastAt) fail("claim.lastAt doit être la date du claim le plus récent de claims.");
+}
+// The dev's bag.
+keys(S.dev, SHAPE.dev, "dev");
+if (typeof S.dev?.address !== "string") fail("dev.address doit être un texte.");
+nums(S.dev, ["tokens"], "dev");
+if (S.dev && !msOrNull(S.dev.checkedAt)) fail("dev.checkedAt : une date en millisecondes, ou null.");
+
 // The books must add up: received = buys + network + dev + waiting, and waiting sits in the router.
 if (!errors.length) {
   const F = S.fees, waiting = F.receivedSol - F.buysSol - F.networkSol - F.devSol;
@@ -85,6 +110,10 @@ if (!errors.length) {
   if (lastH && lastH.pawns !== S.pawns.count) fail(`Le dernier point de history (${lastH.pawns} pawns) ne correspond pas à pawns.count (${S.pawns.count}).`);
   if (S.latest.length && S.latest[0].n !== S.pawns.count) fail(`latest[0].n (${S.latest[0].n}) devrait être le dernier pawn (${S.pawns.count}).`);
   if (S.fees.devSol === 0) notes.push("Part dev : 0 SOL (100 % des fees vont aux pawns).");
+  const claimed = S.claims.reduce((s, c) => s + c.sol, 0);
+  if (claimed > F.receivedSol + 1e-6) fail(`Les 10 derniers claims (${claimed} SOL) dépassent les fees reçues (${F.receivedSol} SOL).`);
+  notes.push(`Claims : ${S.claims.length} affichés · en attente dans pump.fun : ${S.claim.pendingSol} SOL · seuil ${S.claim.minUsd} $ ou ${S.claim.maxWaitH} h.`);
+  notes.push(`Sac du dev : ${S.dev.address || "(pas d'adresse)"} · ${S.dev.tokens} $PAWNS.`);
 }
 
 // Nothing secret: a Solana private key is 64 bytes, i.e. ~88 base58 characters, or a list of 64 numbers.

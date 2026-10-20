@@ -47,8 +47,13 @@ export function makePublisher(gist) {
 
   // What counts as a change: everything but the timestamps and what the SOL price alone moves.
   function keyOf(state) {
-    const { updatedAt, solUsd, nextPawnSol, history, ...rest } = state;
-    return JSON.stringify({ ...rest, history: history.map((p, i) => (i === history.length - 1 ? { ...p, t: 0 } : p)) });
+    const { updatedAt, solUsd, nextPawnSol, history, claim, dev, ...rest } = state;
+    return JSON.stringify({
+      ...rest,
+      history: history.map((p, i) => (i === history.length - 1 ? { ...p, t: 0 } : p)),
+      claim: claim && { ...claim, checkedAt: 0 },
+      dev: dev && { ...dev, checkedAt: 0 }
+    });
   }
 
   async function send(state, key) {

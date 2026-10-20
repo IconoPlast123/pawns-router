@@ -54,9 +54,21 @@ export function openSim(cfg, price) {
 
     async routerLamports() { return S.routerLamports; },
 
-    async claim() {
+    // Simulated dev bag: a made-up address holding 2 % of the supply (the dev buy), so the site can show it.
+    async routerTokens() { return 0; },
+    async readDevBag() {
+      S.devBag ??= freshAddress();
+      return { address: S.devBag, tokensRaw: Math.round(SUPPLY_RAW * 0.02) };
+    },
+
+    // Same shape as live: what waits in the (fake) pump.fun vault, and whether a claim pays for itself 10 times.
+    async previewClaim() {
       accrue();
-      if (S.vaultLamports < 10 * txFee) { save(); return null; }
+      save();
+      return { pendingLamports: S.vaultLamports, gainLamports: S.vaultLamports - txFee, worthIt: S.vaultLamports >= 11 * txFee };
+    },
+
+    async claim() {
       const receivedLamports = S.vaultLamports;
       S.vaultLamports = 0;
       S.routerLamports += receivedLamports - txFee;

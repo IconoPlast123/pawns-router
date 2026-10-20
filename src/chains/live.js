@@ -218,18 +218,30 @@ export function openLive(cfg) {
 
     async routerLamports() { return connection.getBalance(router.publicKey, "confirmed"); },
 
-    // Build, check and simulate the claim: sweep + collect every pump.fun creator fee owed to the router.
+    // Raw $PAWNS held by any wallet, across all its token accounts for the coin. Read-only.
+    async tokensOf(owner) {
+      const { value } = await connection.getTokenAccountsByOwner(new PublicKey(owner), { mint }, "confirmed");
+      return value.reduce((sum, a) => sum + Number(tokenAmount(a.account.data)), 0);
+    },
+    // The router should hold no $PAWNS at all (the dev buy goes to DEV_BAG_WALLET). Pawns never use them.
+    async routerTokens() { return this.tokensOf(router.publicKey); },
+    // The dev's bag, shown on the site. Read-only: the router never signs anything for this wallet.
+    async readDevBag() {
+      if (!cfg.devBagWallet) return { address: "", tokensRaw: 0 };
+      return { address: cfg.devBagWallet, tokensRaw: await this.tokensOf(cfg.devBagWallet) };
+    },
+
+    // Build, check and simulate the claim (sweep + collect every pump.fun creator fee owed to the router).
+    // pendingLamports: what is waiting in pump.fun; worthIt: the claim pays for itself 10 times.
     async previewClaim() {
       const tx = compile(await pump.claim(router.publicKey));
       inspect(tx, router);
       const [r] = await simulate(connection, tx, [router.publicKey]);
-      return { tx, gainLamports: r.delta };
+      return { tx, gainLamports: r.delta, pendingLamports: Math.max(0, r.delta + txFee), worthIt: r.delta >= 10 * txFee };
     },
 
-    async claim() {
-      const { tx, gainLamports } = await this.previewClaim();
-      // Nothing to claim, or not worth a transaction yet: a claim must pay for itself 10 times.
-      if (gainLamports < 10 * txFee) return null;
+    // Sends a claim the router decided on (previewClaim, then the CLAIM_MIN_USD / CLAIM_MAX_WAIT_H rule).
+    async claim({ tx }) {
       const s = await sign(tx);
       const confirmed = await sendAndConfirm(tx, s);
       const fee = confirmed.meta.fee;

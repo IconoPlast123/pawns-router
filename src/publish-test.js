@@ -24,7 +24,11 @@ try {
   source = cfg.stateFile;
 } catch {
   const ledger = openLedger(cfg.ledgerFile, cfg.real ? "live" : "dry_run");
-  state = buildState({ mode: cfg.mode, ledger, routerLamports: 0, solUsd: cfg.solUsdFallback, pawnUsd: cfg.pawnUsd, nextPawnLamports: 0 });
+  state = buildState({
+    mode: cfg.mode, ledger, routerLamports: 0, solUsd: cfg.solUsdFallback, pawnUsd: cfg.pawnUsd, nextPawnLamports: 0,
+    claim: { pendingLamports: 0, checkedAt: null, minUsd: cfg.claimMinUsd, maxWaitH: cfg.claimMaxWaitMs / 3_600_000 },
+    dev: { address: cfg.devBagWallet, tokensRaw: 0, checkedAt: null }
+  });
   source = "état vide (le router n'a pas encore tourné dans ce mode)";
 }
 

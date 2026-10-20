@@ -36,14 +36,29 @@ if (balance === 0) {
 }
 console.log(`Coin : ${cfg.mint} · SOL à ${price.usd} $${price.fresh ? "" : " (prix de secours !)"}\n`);
 
+const live = readJson(cfg.ledgerFile, null);
 try {
   const c = await chain.previewClaim();
-  console.log(c.gainLamports > 0
-    ? `CLAIM  OK · le router gagnerait ${toSol(c.gainLamports)} SOL (frais déduits).`
-    : "CLAIM  OK · rien à réclamer pour l'instant (normal tant que personne n'a tradé).");
+  const usd = toSol(c.pendingLamports) * price.usd;
+  if (c.gainLamports <= 0) console.log("CLAIM  OK · rien à réclamer pour l'instant (normal tant que personne n'a tradé).");
+  else {
+    console.log(`CLAIM  OK · ${toSol(c.pendingLamports)} SOL en attente dans pump.fun (≈ ${usd.toFixed(2)} $).`);
+    console.log(usd >= cfg.claimMinUsd && c.worthIt
+      ? `         Le router réclamerait maintenant (seuil ${cfg.claimMinUsd} $ atteint).`
+      : `         Le router attend ${cfg.claimMinUsd} $, ou ${cfg.claimMaxWaitMs / 3_600_000} h après le dernier claim si ça paie au moins un pawn.`);
+  }
 } catch (e) { ok = false; console.log(`CLAIM  ÉCHEC · ${e.message}`); }
 
-const live = readJson(cfg.ledgerFile, null);
+// The router keeps no $PAWNS (the dev buy goes to DEV_BAG_WALLET); the dev's bag is only read.
+try {
+  const held = await chain.routerTokens();
+  const ui = (raw) => (raw / 10 ** chain.decimals).toLocaleString("fr-FR");
+  if (held) { ok = false; console.log(`ROUTER ATTENTION · il détient ${ui(held)} $PAWNS : transfère-les vers DEV_BAG_WALLET. Le mode live refusera de démarrer.`); }
+  else console.log("ROUTER OK · aucun $PAWNS dans le router.");
+  const d = await chain.readDevBag();
+  console.log(d.address ? `DEV    OK · sac du dev ${d.address} : ${ui(d.tokensRaw)} $PAWNS (lecture seule).` : "DEV    · DEV_BAG_WALLET vide : le site n'affichera pas de sac du dev.");
+} catch (e) { ok = false; console.log(`ROUTER ÉCHEC · lecture des soldes $PAWNS impossible : ${e.message}`); }
+
 chain.attach({ lut: () => live?.lut ?? null });
 const n = (live?.pawns?.length ?? 0) + 1;
 

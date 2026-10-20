@@ -14,7 +14,10 @@ function thin(points, now) {
 }
 
 // The public state.json, exactly in the shape of docs/decisions.md. No secret ever goes in here.
-export function buildState({ mode, ledger, routerLamports, solUsd, pawnUsd, nextPawnLamports, now = Date.now() }) {
+export function buildState({
+  mode, ledger, routerLamports, solUsd, pawnUsd, nextPawnLamports, now = Date.now(),
+  claim = { pendingLamports: 0, checkedAt: null, minUsd: 0, maxWaitH: 0 }, dev = { address: "", tokensRaw: 0, checkedAt: null }
+}) {
   const L = ledger.data, T = L.totals, unit = 10 ** L.decimals;
   const pawns = L.pawns;
   const sent = T.buysLamports + T.networkLamports;
@@ -44,7 +47,16 @@ export function buildState({ mode, ledger, routerLamports, solUsd, pawnUsd, next
     latest: pawns.slice(-10).reverse().map((p) => ({
       n: p.n, wallet: p.wallet, tokens: round(p.tokensRaw / unit, 2), usd: round(p.usd, 2), sol: sol(p.buyLamports), at: p.at, tx: p.tx,
       buyer: p.buyer ?? "", kept: round((p.keptRaw ?? 0) / unit, 2)
-    }))
+    })),
+    // Fees waiting in pump.fun (last simulation) and the claim rule: claim at minUsd, or after maxWaitH hours.
+    claim: {
+      pendingSol: sol(claim.pendingLamports), minUsd: claim.minUsd, maxWaitH: claim.maxWaitH,
+      lastAt: L.claims.at(-1)?.at ?? null, checkedAt: claim.checkedAt
+    },
+    // The last 10 claims, newest first, from the ledger.
+    claims: L.claims.slice(-10).reverse().map((c) => ({ at: c.at, sol: sol(c.lamports), tx: c.tx })),
+    // The dev's bag (DEV_BAG_WALLET), read-only, re-read with every hourly check.
+    dev: { address: dev.address ?? "", tokens: round(dev.tokensRaw / unit, 2), checkedAt: dev.checkedAt }
   };
 }
 

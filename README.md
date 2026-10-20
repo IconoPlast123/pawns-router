@@ -4,10 +4,10 @@ The bot behind [$PAWNS](https://pawnsarmy.xyz). This is the exact code that runs
 
 It does four things, on its own, around the clock:
 
-1. **Claims** the coin's pump.fun creator fees into a public wallet, the router, every 5 minutes.
+1. **Claims** the coin's pump.fun creator fees into a public wallet, the router. Every 5 minutes it simulates the claim, without sending anything. It claims as soon as $50 of fees are waiting (`CLAIM_MIN_USD`), or after 24 hours (`CLAIM_MAX_WAIT_H`) if the fees pay for at least one pawn.
 2. **Spawns pawns.** For every $3 of fees in the router, one transaction funds a buyer wallet, which buys $3 of $PAWNS straight into a brand new pawn address.
-3. **Re-checks** every pawn's balance on-chain, every hour.
-4. **Publishes** its ledger (`state.json`) for the website: fees received, pawn buys, network costs, what's waiting in the router, and the latest pawns.
+3. **Re-checks** every pawn's balance on-chain, every hour, along with the dev's bag (`DEV_BAG_WALLET`). The router only reads that wallet and never signs for it.
+4. **Publishes** its ledger (`state.json`) for the website: fees received and waiting, every claim, pawn buys, network costs, what's in the router, the latest pawns, and the dev's bag.
 
 ## Why a pawn can never sell
 

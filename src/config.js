@@ -85,6 +85,12 @@ export function loadConfig(argv = process.argv.slice(2)) {
 
     pawnUsd: num("PAWN_USD", 3, { min: 0.1, max: 1000 }),
     claimEveryMs: num("CLAIM_EVERY_MIN", 5, { min: 0.1 }) * 60_000,
+    // Claim once the fees waiting in pump.fun are worth CLAIM_MIN_USD, or after CLAIM_MAX_WAIT_H anyway
+    // (as long as they pay for at least one pawn).
+    claimMinUsd: num("CLAIM_MIN_USD", 50, { min: 0 }),
+    claimMaxWaitMs: num("CLAIM_MAX_WAIT_H", 24, { min: 0.1 }) * 3_600_000,
+    // The dev's bag (public address only): shown on the site, read-only, the router never signs for it.
+    devBagWallet: str("DEV_BAG_WALLET"),
     maxPawnsPerMin: num("MAX_PAWNS_PER_MIN", 30, { min: 1, max: 600 }),
     gasBufferSol: num("GAS_BUFFER_SOL", 0.01, { min: 0.002 }),
     checkEveryMs: num("CHECK_EVERY_MIN", 60, { min: 1 }) * 60_000,
@@ -121,8 +127,10 @@ export function loadConfig(argv = process.argv.slice(2)) {
   if (fast) {
     if (real) throw new Error("--fast ne marche qu'en dry_run.");
     c.claimEveryMs = 20_000;
+    c.claimMaxWaitMs = 120_000;
     c.historyEveryMs = 60_000;
     c.checkEveryMs = 120_000;
+    c.sim.volumeUsdPerHour *= 8; // fees pile up faster, so the CLAIM_MIN_USD threshold is reached every minute or so
   }
 
   if (real && synced(c.voices.keysFile)) c.keyWarning = [c.keyWarning, `Les clés des voix (${c.voices.keysFile}) sont dans un dossier synchronisé dans le cloud, qui en garde une copie. Range ce fichier ailleurs.`].filter(Boolean).join(" ");
@@ -132,5 +140,6 @@ export function loadConfig(argv = process.argv.slice(2)) {
     throw new Error("Mode live bloqué : mets LIVE_CONFIRMED=oui dans .env, une fois le live validé.");
   }
   if (c.devSharePct > 0 && real && !c.devWallet) throw new Error("DEV_SHARE_PCT > 0 demande un DEV_WALLET.");
+  if (c.devBagWallet && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(c.devBagWallet)) throw new Error(`DEV_BAG_WALLET="${c.devBagWallet}" n'est pas une adresse Solana.`);
   return c;
 }

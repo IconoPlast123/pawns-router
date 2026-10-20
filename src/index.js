@@ -120,13 +120,40 @@ log.info(`Router : ${routerAddress} · ${L.pawns.length} pawns au compteur.`);
 
 const t = {
   routerLamports: 0, lastBalanceAt: 0, lastPriceAt: Date.now(), lastClaimAt: 0, lastPawnAt: 0,
-  lastCheckAt: L.check.at || 0, lastWriteAt: 0, failures: 0, halted: false, stopping: false, warned: {}
+  lastCheckAt: L.check.at || 0, lastWriteAt: 0, failures: 0, halted: false, stopping: false, warned: {},
+  claim: { pendingLamports: 0, checkedAt: null },
+  dev: { address: cfg.devBagWallet, tokensRaw: 0, checkedAt: null }
 };
+const uiTokens = (raw) => Math.round(raw / 10 ** L.decimals).toLocaleString("fr-FR");
+
+// The dev's bag (DEV_BAG_WALLET), shown on the site. Read-only, at startup and with every hourly check.
+async function refreshDevBag() {
+  try {
+    const d = await chain.readDevBag();
+    t.dev = { address: d.address, tokensRaw: d.tokensRaw, checkedAt: Date.now() };
+  } catch (e) { log.warn(`Sac du dev illisible pour l'instant : ${e.message}`); }
+}
+
+// The router keeps no $PAWNS (thesis 08): the dev buy belongs in DEV_BAG_WALLET. Pawns never touch the router's
+// token account and the ledger only counts SOL, so a balance there is harmless, but it must not stay.
+async function checkRouterTokens(atStart) {
+  if (!cfg.real) return;
+  const held = await chain.routerTokens();
+  if (!held) { clearWarn("routerTokens"); return; }
+  const msg = `Le router détient ${uiTokens(held)} $PAWNS, sans doute le dev buy : transfère-les vers DEV_BAG_WALLET${cfg.devBagWallet ? ` (${cfg.devBagWallet})` : ""} avant de démarrer ; les pawns n'en ont pas besoin.`;
+  if (atStart && cfg.mode === "live") { log.error(msg + " Le mode live refuse de démarrer tant que c'est le cas."); process.exit(1); }
+  warnOnce("routerTokens", msg);
+}
 const spacingMs = 60_000 / cfg.maxPawnsPerMin;
 const bufferLamports = toLamports(cfg.gasBufferSol);
 const isPaused = () => cfg.mode === "paused" || t.halted || fs.existsSync(cfg.pauseFile);
 const warnOnce = (key, msg) => { if (!t.warned[key]) log.warn(msg); t.warned[key] = true; };
 const clearWarn = (key) => { t.warned[key] = false; };
+
+try { await checkRouterTokens(true); }
+catch (e) { if (cfg.mode === "live") { log.error(`Solde $PAWNS du router illisible (${e.message}) : le mode live ne démarre pas sans cette vérification.`); process.exit(1); } log.warn(`Solde $PAWNS du router illisible : ${e.message}`); }
+await refreshDevBag();
+t.lastDevAt = Date.now();
 
 // What one pawn costs right now: $PAWN_USD in SOL, plus the token account rent and the network fees.
 function pawnCost() {
@@ -150,12 +177,34 @@ async function refreshBalance() {
   } else clearWarn("missing");
 }
 
-async function doClaim() {
-  const r = await chain.claim();
-  if (!r) { log.info("Claim : rien à réclamer pour l'instant."); return; }
+// Every CLAIM_EVERY_MIN: simulate the claim (nothing sent), then claim only if the fees waiting in pump.fun are
+// worth CLAIM_MIN_USD, or if the last claim is CLAIM_MAX_WAIT_H old and the fees pay for at least one pawn.
+// Either way the claim must pay for its own fee 10 times.
+// Paused: the simulation still runs (read-only), so the site shows what is waiting, but nothing is claimed.
+async function doClaim(previewOnly) {
+  // An empty router can't even pay a simulated fee: say it once, rather than an error every few minutes.
+  if (cfg.real && t.routerLamports === 0) { warnOnce("emptyRouter", "Le router n'a pas de SOL : pas de simulation de claim tant qu'il n'a pas reçu son buffer gas."); return; }
+  clearWarn("emptyRouter");
+  const p = await chain.previewClaim();
+  const now = Date.now();
+  t.claim = { pendingLamports: p.pendingLamports, checkedAt: now };
+  if (previewOnly) return;
+  const pendingUsd = toSol(p.pendingLamports) * price.usd;
+  const lastAt = L.claims.at(-1)?.at ?? L.startedAt;
+  let why = "";
+  if (p.worthIt && pendingUsd >= cfg.claimMinUsd) why = `${round(pendingUsd, 2)} $ en attente, seuil ${cfg.claimMinUsd} $`;
+  else if (p.worthIt && now - lastAt >= cfg.claimMaxWaitMs && p.pendingLamports >= pawnCost().nextLamports) {
+    why = `dernier claim il y a plus de ${round(cfg.claimMaxWaitMs / 3_600_000, 2)} h`;
+  }
+  if (!why) {
+    log.info(`Claim : ${toSol(p.pendingLamports).toFixed(6)} SOL en attente dans pump.fun (≈ ${round(pendingUsd, 2)} $), on attend ${cfg.claimMinUsd} $.`);
+    return;
+  }
+  const r = await chain.claim(p);
   ledger.addClaim({ at: Date.now(), receivedLamports: r.receivedLamports, feeLamports: r.feeLamports, tx: r.tx });
   ledger.save();
-  log.info(`Claim : +${toSol(r.receivedLamports)} SOL de creator fees (frais réseau ${toSol(r.feeLamports)} SOL).${solscan(r.tx)}`);
+  t.claim = { pendingLamports: 0, checkedAt: Date.now() };
+  log.info(`Claim (${why}) : +${toSol(r.receivedLamports)} SOL de creator fees (frais réseau ${toSol(r.feeLamports)} SOL).${solscan(r.tx)}`);
   if (cfg.devSharePct > 0) {
     const lamports = Math.floor(r.receivedLamports * cfg.devSharePct / 100);
     const p = await chain.payDev(lamports);
@@ -220,7 +269,9 @@ function publish() {
   const { nextLamports } = pawnCost();
   const state = buildState({
     mode: isPaused() ? "paused" : cfg.mode,
-    ledger, routerLamports: t.routerLamports, solUsd: price.usd, pawnUsd: cfg.pawnUsd, nextPawnLamports: nextLamports
+    ledger, routerLamports: t.routerLamports, solUsd: price.usd, pawnUsd: cfg.pawnUsd, nextPawnLamports: nextLamports,
+    claim: { ...t.claim, minUsd: cfg.claimMinUsd, maxWaitH: round(cfg.claimMaxWaitMs / 3_600_000, 4) },
+    dev: t.dev
   });
   writeState(cfg.stateFile, state);
   publisher?.offer(state);
@@ -233,9 +284,14 @@ async function tick() {
   if (now - t.lastPriceAt >= 60_000) { t.lastPriceAt = now; await price.refresh(); }
   if (now - t.lastBalanceAt >= (cfg.real ? 15_000 : 1000)) await refreshBalance();
   const paused = isPaused();
-  if (!paused && now - t.lastClaimAt >= cfg.claimEveryMs) { t.lastClaimAt = now; await doClaim(); }
+  if (now - t.lastClaimAt >= cfg.claimEveryMs) { t.lastClaimAt = now; await doClaim(paused); }
   if (!paused && now - t.lastPawnAt >= spacingMs) await maybeSpawn();
   if (L.pawns.length && now - t.lastCheckAt >= cfg.checkEveryMs) { t.lastCheckAt = now; await doCheck(); }
+  if (now - t.lastDevAt >= cfg.checkEveryMs) {
+    t.lastDevAt = now;
+    await refreshDevBag();
+    await checkRouterTokens(false).catch((e) => log.warn(`Solde $PAWNS du router illisible : ${e.message}`));
+  }
   if (now - (L.history.at(-1)?.t ?? 0) >= cfg.historyEveryMs) { ledger.pushHistory(now); ledger.save(); }
   if (Date.now() - t.lastWriteAt >= 2000) publish();
 }
