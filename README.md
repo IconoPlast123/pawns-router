@@ -5,7 +5,7 @@ The bot behind [$PAWNS](https://pawnsarmy.xyz). This is the exact code that runs
 It does four things, on its own, around the clock:
 
 1. **Claims** the coin's pump.fun creator fees into a public wallet, the router, every 5 minutes.
-2. **Spawns pawns.** For every $3 of fees in the router, one transaction buys $3 of $PAWNS and drops it into a brand new pawn address.
+2. **Spawns pawns.** For every $3 of fees in the router, one transaction funds a buyer wallet, which buys $3 of $PAWNS and drops it into a brand new pawn address.
 3. **Re-checks** every pawn's balance on-chain, every hour.
 4. **Publishes** its ledger (`state.json`) for the website: fees received, pawn buys, network costs, what's waiting in the router, and the latest pawns.
 
@@ -21,7 +21,14 @@ An address derived this way sits off the ed25519 curve, so **no private key exis
 
 The whole definition is in [`src/chains/pawn.js`](src/chains/pawn.js).
 
-Buy and lock happen in **one transaction**. If any step fails, nothing is spent. Before signing, the router simulates every transaction on mainnet. It refuses unless the tokens land in a keyless pawn address and the cost is what it expects (see [`src/chains/guard.js`](src/chains/guard.js)).
+Funding, buy and lock happen in **one transaction**, signed by the router and the pawn's buyer. If any step fails, nothing is spent.
+
+## Who buys each pawn
+
+Every pawn has its own buyer, so pump.fun shows a different wallet on each pawn buy. These are not outside traders: the website lists every buyer next to its pawn.
+
+- **Pawns #31 and up**: a wallet created for that single transaction. The router funds it, it buys, it drops every token in the pawn, and it ends empty. Its key is never written anywhere.
+- **Pawns #1 to #30**: the wallets of the 30 Season 1 voices, labeled team accounts that each post one thesis on pump.fun. pump.fun only lets wallets that bought the coin comment, so each voice keeps a sliver of its pawn's buy (`VOICE_KEEP_PCT`, 1% by default). That sliver has a key and could be sold. The ledger shows it. Before signing, the router simulates every transaction on mainnet. It refuses unless the tokens land in a keyless pawn address and the cost is what it expects (see [`src/chains/guard.js`](src/chains/guard.js)).
 
 ## Check it yourself
 

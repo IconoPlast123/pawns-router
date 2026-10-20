@@ -43,20 +43,41 @@ try {
     : "CLAIM  OK · rien à réclamer pour l'instant (normal tant que personne n'a tradé).");
 } catch (e) { ok = false; console.log(`CLAIM  ÉCHEC · ${e.message}`); }
 
-const n = (readJson(cfg.ledgerFile, null)?.pawns?.length ?? 0) + 1;
+const live = readJson(cfg.ledgerFile, null);
+chain.attach({ lut: () => live?.lut ?? null });
+const n = (live?.pawns?.length ?? 0) + 1;
+
+// Pawns #1-#30 are bought by the voices: their keys file must open the published addresses.
+if (n <= 30) {
+  try { chain.checkVoices(); console.log("VOIX   OK · les 30 clés ouvrent les adresses publiées des voix (aucune clé affichée)."); }
+  catch (e) { ok = false; console.log(`VOIX   ÉCHEC · ${e.message}`); }
+}
+
+// The next pawn, and while voices are still buying, also a pawn bought by a fresh wallet (#31 and after).
 const buyLamports = toLamports(cfg.pawnUsd / price.usd);
 const est = chain.costEstimate();
-const need = buyLamports + chain.reserveLamports(buyLamports) + 2 * est.rentLamports + est.networkLamports;
-if (balance < need) {
-  console.log(`PAWN   pas testable pour l'instant · le router a ${toSol(balance)} SOL, un pawn en demande environ ${toSol(need)}.`);
-  console.log("         Relance « npm run rehearse » quand les premières creator fees sont réclamées.");
-} else try {
-  const r = await chain.previewPawn(n, buyLamports);
-  const tokens = Number(r.p.tokens) / 10 ** chain.decimals;
-  console.log(`PAWN   OK · pawn #${n} = ${r.p.holder.toBase58()} (adresse sans clé, recalculée : ${pawnAddress(cfg.mint, n).equals(r.p.holder)})`);
-  console.log(`         achat sur ${r.p.venue} : ${tokens.toLocaleString("fr-FR")} $PAWNS pour ${cfg.pawnUsd} $, coût total ${toSol(r.costLamports)} SOL`);
-  console.log(`         compte token du pawn : ${r.p.holderAta.toBase58()}`);
-} catch (e) { ok = false; console.log(`PAWN   ÉCHEC · ${e.message}`); }
+const need = buyLamports + chain.reserveLamports(buyLamports) + 2 * est.rentLamports + 2 * est.networkLamports;
+const ui = (raw) => (Number(raw) / 10 ** chain.decimals).toLocaleString("fr-FR");
+for (const k of n <= 30 ? [n, 31] : [n]) {
+  if (balance < need) {
+    console.log(`PAWN   #${k} pas testable pour l'instant · le router a ${toSol(balance)} SOL, un pawn en demande environ ${toSol(need)}.`);
+    console.log("         Relance « npm run rehearse » quand les premières creator fees sont réclamées.");
+    break;
+  }
+  try {
+    const r = await chain.previewPawn(k, buyLamports);
+    const size = r.tx.serialize().length, lut = r.tx.message.addressTableLookups.length ? ", avec la table d'adresses" : "";
+    console.log(`PAWN   OK · pawn #${k} = ${r.plan.holder.toBase58()} (adresse sans clé, recalculée : ${pawnAddress(cfg.mint, k).equals(r.plan.holder)})`);
+    console.log(`         acheteur : ${r.buyer.voice ? `la voix #${k}` : "un wallet neuf"} ${r.buyer.publicKey.toBase58()}`);
+    console.log(`         achat sur ${r.plan.venue} : ${ui(r.pawnTokens)} $PAWNS dans le pawn${r.buyer.voice ? `, ${ui(r.kept)} gardés par la voix` : ", acheteur vidé à 0"}`);
+    console.log(`         coût pour le router ${toSol(r.costLamports)} SOL · transaction de ${size} octets, 2 signatures${lut}`);
+  } catch (e) {
+    if (e.needsTable) {
+      console.log(`PAWN   #${k} pas simulable ici · ${e.message}`);
+      console.log("         Chaque pawn reste simulé sur la vraie chaîne juste avant son envoi.");
+    } else { ok = false; console.log(`PAWN   #${k} ÉCHEC · ${e.message}`); }
+  }
+}
 
 console.log(ok ? "\nRépétition réussie : rien n'a été envoyé." : "\nRépétition avec erreurs : rien n'a été envoyé.");
 process.exit(ok ? 0 : 1);

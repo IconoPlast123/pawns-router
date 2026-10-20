@@ -10,16 +10,22 @@ export const PROGRAMS = {
   ata: "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
   pump: "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
   pumpAmm: "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
-  pumpFees: "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ"
+  pumpFees: "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ",
+  lookupTable: "AddressLookupTab1e1111111111111111111111111"
 };
 const ALLOWED = new Set(Object.values(PROGRAMS));
+const b58 = (k) => (k instanceof PublicKey ? k : k.publicKey).toBase58();
 
-// Static checks on the message: fee payer, signers, programs.
-export function inspect(tx, signer) {
+// Static checks on the message: fee payer (the first signer, always the router), exactly the expected
+// signers and nothing else, known programs only.
+export function inspect(tx, ...signers) {
   const msg = tx.message, keys = msg.staticAccountKeys.map((k) => k.toBase58());
-  const want = (signer instanceof PublicKey ? signer : signer.publicKey).toBase58();
-  if (keys[0] !== want) throw new Error(`Transaction refusée : payée par ${keys[0]}, attendu ${want}.`);
-  if (msg.header.numRequiredSignatures !== 1) throw new Error("Transaction refusée : elle demande d'autres signatures que celle du router.");
+  const want = signers.map(b58);
+  if (keys[0] !== want[0]) throw new Error(`Transaction refusée : payée par ${keys[0]}, attendu ${want[0]}.`);
+  const required = keys.slice(0, msg.header.numRequiredSignatures);
+  if (required.length !== want.length || required.some((k) => !want.includes(k))) {
+    throw new Error(`Transaction refusée : signataires inattendus (${required.join(", ")}).`);
+  }
   for (const ix of msg.compiledInstructions) {
     const program = keys[ix.programIdIndex];
     if (!ALLOWED.has(program)) throw new Error(`Transaction refusée : programme inconnu ${program}.`);
@@ -42,8 +48,11 @@ export async function simulate(connection, tx, watch) {
   return watch.map((_, i) => {
     const a = sim.value.accounts?.[i];
     return {
+      before: before[i]?.lamports ?? 0,
+      after: a?.lamports ?? 0,
       delta: (a?.lamports ?? 0) - (before[i]?.lamports ?? 0),
-      data: a ? Buffer.from(a.data[0], "base64") : null
+      beforeData: before[i]?.data ?? null,
+      data: a && a.lamports > 0 ? Buffer.from(a.data[0], "base64") : null
     };
   });
 }

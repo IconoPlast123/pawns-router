@@ -61,14 +61,35 @@ if (!L.router) {
 }
 function recordPawn(r) {
   const pawn = ledger.addPawn({
-    wallet: r.wallet, tokenAccount: r.tokenAccount, tokensRaw: r.tokensRaw,
+    wallet: r.wallet, tokenAccount: r.tokenAccount, buyer: r.buyer, tokensRaw: r.tokensRaw, keptRaw: r.keptRaw ?? 0,
     buyLamports: r.buyLamports, networkLamports: r.networkLamports,
     usd: round(toSol(r.buyLamports) * price.usd, 4), at: r.at ?? Date.now(), tx: r.tx
   });
-  const tokens = Math.round(r.tokensRaw / 10 ** L.decimals).toLocaleString("fr-FR");
-  log.info(`Pawn #${pawn.n} : ${tokens} $PAWNS pour ${toSol(r.buyLamports).toFixed(4)} SOL · ${r.wallet}${solscan(r.tx)}`);
+  const ui = (raw) => Math.round(raw / 10 ** L.decimals).toLocaleString("fr-FR");
+  const kept = pawn.keptRaw ? ` (la voix en garde ${ui(pawn.keptRaw)})` : "";
+  log.info(`Pawn #${pawn.n} : ${ui(r.tokensRaw)} $PAWNS pour ${toSol(r.buyLamports).toFixed(4)} SOL${kept} · pawn ${r.wallet} · acheteur ${r.buyer}${solscan(r.tx)}`);
 }
 function solscan(tx) { return tx ? ` · https://solscan.io/tx/${tx}` : ""; }
+
+// Live only: where the router keeps its address lookup table, and how its upkeep is booked (network costs).
+chain.attach?.({
+  lut: () => L.lut ?? null,
+  saveLut: (address) => { L.lut = address; ledger.save(); },
+  onCost: ({ lamports, tx, why }) => {
+    ledger.addNetworkCost({ at: Date.now(), lamports, tx, why });
+    ledger.save();
+    log.info(`Coût réseau : ${toSol(lamports)} SOL (${why}).${solscan(tx)}`);
+  }
+});
+
+// Pawns #1 to #30 are bought by the 30 voices: check their keys file before anything else.
+if (cfg.real && L.pawns.length < 30 && chain.checkVoices) {
+  try { chain.checkVoices(); log.info("Clés des voix vérifiées : chaque clé ouvre l'adresse publiée de sa voix."); }
+  catch (e) {
+    if (cfg.mode === "live") { log.error(`${e.message} Les pawns #1 à #30 ne peuvent être achetés que par leurs voix : le router s'arrête.`); process.exit(1); }
+    log.warn(e.message);
+  }
+}
 
 // A pawn whose transaction was sent but not confirmed when something went wrong:
 // ask the chain whether it landed, and book it if it did. If we can't tell, stay stopped.
@@ -166,7 +187,11 @@ async function maybeSpawn() {
     ledger.save();
     t.failures = 0;
   } catch (e) {
-    if (!L.pending) {
+    if (e.fatal) {
+      // e.g. a voice's key missing or not matching: never buy that pawn with another wallet.
+      t.halted = true;
+      log.error(`${e.message} Plus de pawns tant que ce n'est pas réglé : corrige, puis relance le router.`);
+    } else if (!L.pending) {
       // Refused before anything was sent (simulation, checks, RPC): nothing spent. Try again in a minute.
       log.warn(`Pawn pas créé, rien n'a été envoyé : ${e.message} Nouvel essai dans 1 min.`);
       t.lastPawnAt = Date.now() + 60_000;

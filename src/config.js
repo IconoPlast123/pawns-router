@@ -65,7 +65,12 @@ export function loadConfig(argv = process.argv.slice(2)) {
   const mode = (str("MODE") || "dry_run").toLowerCase();
   if (!MODES.includes(mode)) throw new Error(`MODE="${mode}" inconnu. Choix possibles : ${MODES.join(", ")}.`);
   const real = mode !== "dry_run";
-  const key = real ? readSecret("ROUTER_SECRET_KEY", "ROUTER_KEY_FILE", "La clé du router") : { secret: "", warning: "" };
+  let key = { secret: "", warning: "" };
+  if (real) {
+    // Only live signs: paused mode and the rehearsal can run on ROUTER_ADDRESS before the key file exists.
+    try { key = readSecret("ROUTER_SECRET_KEY", "ROUTER_KEY_FILE", "La clé du router"); }
+    catch (e) { if (mode === "live" || !str("ROUTER_ADDRESS")) throw e; }
+  }
 
   const c = {
     mode,
@@ -88,6 +93,11 @@ export function loadConfig(argv = process.argv.slice(2)) {
     devWallet: str("DEV_WALLET"),
     priorityFeeSol: num("PRIORITY_FEE_SOL", 0.00001, { min: 0, max: 0.01 }),
     slippagePct: num("SLIPPAGE_PCT", 10, { min: 0.5, max: 50 }),
+    voices: {
+      keysFile: expandHome(str("VOICES_KEYS_FILE") || "~/pawns-voices-wallets.csv"),
+      addressesFile: path.resolve(ROOT, expandHome(str("VOICES_ADDRESSES_FILE") || "../docs/voices-wallets.md")),
+      keepPct: num("VOICE_KEEP_PCT", 1, { min: 0, max: 10 })
+    },
 
     stateFile: file("STATE_FILE", "out/state.json"),
     previewPort: num("PREVIEW_PORT", 8787, { min: 0, max: 65535 }),
@@ -115,6 +125,7 @@ export function loadConfig(argv = process.argv.slice(2)) {
     c.checkEveryMs = 120_000;
   }
 
+  if (real && synced(c.voices.keysFile)) c.keyWarning = [c.keyWarning, `Les clés des voix (${c.voices.keysFile}) sont dans un dossier synchronisé dans le cloud, qui en garde une copie. Range ce fichier ailleurs.`].filter(Boolean).join(" ");
   if (real) checkReal(c);
   if (mode === "live" && !c.routerSecret) throw new Error("Pas de clé du router : remplis ROUTER_KEY_FILE dans .env (obligatoire en live).");
   if (mode === "live" && !c.liveConfirmed) {

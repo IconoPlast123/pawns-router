@@ -54,7 +54,7 @@ export function openLedger(file, kind) {
       return pawn;
     },
 
-    // A fee paid for nothing (a transaction that landed but failed). Still a network cost, still on the books.
+    // A network cost outside a pawn: a transaction that landed but failed, or the address lookup table's upkeep.
     addNetworkCost({ at, lamports, tx = "", why = "" }) {
       T.networkLamports += lamports;
       (data.costs ??= []).push({ at, lamports, tx, why });
