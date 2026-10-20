@@ -1,6 +1,6 @@
 # $PAWNS router
 
-The bot behind [$PAWNS](https://pawns-site.vercel.app). This is the exact code that runs.
+The bot behind [$PAWNS](https://pawnsarmy.xyz). This is the exact code that runs.
 
 It does four things, on its own, around the clock:
 
