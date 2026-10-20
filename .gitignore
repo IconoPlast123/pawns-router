@@ -1,0 +1,12 @@
+# Secrets: never in git
+.env
+.env.*
+!.env.example
+*.key
+*keypair*.json
+
+# Runtime data (ledgers, simulation, logs) and generated output
+node_modules/
+data/
+out/
+PAUSE

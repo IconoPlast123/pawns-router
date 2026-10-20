@@ -1,0 +1,28 @@
+{
+  "name": "pawns-router",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The $PAWNS router: claims pump.fun creator fees and turns them into pawns that never sell.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "fast": "node --env-file-if-exists=.env src/index.js --fast",
+    "check": "node --env-file-if-exists=.env src/check-state.js",
+    "rehearse": "node --env-file-if-exists=.env src/rehearse.js",
+    "verify": "node --env-file-if-exists=.env src/verify-pawns.js",
+    "publish-test": "node --env-file-if-exists=.env src/publish-test.js",
+    "pause": "node -e \"require('fs').writeFileSync('PAUSE', 'Router paused by hand. Delete this file (npm run resume) to resume.\\n')\"",
+    "resume": "node -e \"require('fs').rmSync('PAUSE', { force: true })\"",
+    "reset-dry-run": "node -e \"for (const f of ['data/ledger-dry_run.json','data/sim.json','out/state.json']) require('fs').rmSync(f, { force: true })\""
+  },
+  "dependencies": {
+    "@pump-fun/pump-sdk": "4.1.0",
+    "@pump-fun/pump-swap-sdk": "1.20.0",
+    "@solana/web3.js": "1.98.4",
+    "bn.js": "5.2.2",
+    "bs58": "6.0.0"
+  }
+}
