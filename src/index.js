@@ -20,7 +20,8 @@ const BANNER = {
 };
 log.info(BANNER[cfg.mode] + (cfg.fast ? " Horloges accélérées (--fast)." : ""));
 if (cfg.testRun) log.info("TEST sur un coin d'essai : chaque pawn est acheté par un wallet neuf (les 30 voix ne servent pas), " +
-  `ledger à part (${cfg.ledgerFile}), rien n'est publié en ligne.`);
+  `ledger à part (${cfg.ledgerFile}), rien n'est publié en ligne.` +
+  (cfg.testPawnBudgetSol ? ` Jusqu'à ${cfg.testPawnBudgetSol} SOL déposés à la main peuvent payer des pawns (TEST_PAWN_BUDGET_SOL).` : ""));
 if (cfg.keyWarning) log.warn(cfg.keyWarning);
 
 // Public copy of state.json on a GitHub Gist (optional). A problem here never stops the router.
@@ -229,8 +230,10 @@ async function maybeSpawn() {
   clearWarn("price");
   const { buyLamports, nextLamports } = pawnCost();
   // Pawns are paid from creator fees only (what's waiting on the books), never from the SOL you
-  // deposited, and the router always keeps its gas buffer.
-  const T = L.totals, waiting = T.receivedLamports - T.buysLamports - T.networkLamports - T.devLamports;
+  // deposited, and the router always keeps its gas buffer. Test run only: up to TEST_PAWN_BUDGET_SOL
+  // of the deposits may pay for pawns too, to test them without trading volume.
+  const T = L.totals, testBudget = Math.min(T.depositsLamports, toLamports(cfg.testPawnBudgetSol));
+  const waiting = T.receivedLamports + testBudget - T.buysLamports - T.networkLamports - T.devLamports;
   const need = nextLamports + (chain.reserveLamports?.(buyLamports) ?? 0);
   if (waiting < need || t.routerLamports - bufferLamports < need) return;
   t.lastPawnAt = Date.now();

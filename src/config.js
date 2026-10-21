@@ -96,6 +96,8 @@ export function loadConfig(argv = process.argv.slice(2)) {
     claimMaxWaitMs: num("CLAIM_MAX_WAIT_H", 24, { min: 0.1 }) * 3_600_000,
     // The dev's bag (public address only): shown on the site, read-only, the router never signs for it.
     devBagWallet: str("DEV_BAG_WALLET"),
+    // Test run only: SOL deposited by hand that may pay for pawns, to test them without trading volume.
+    testPawnBudgetSol: num("TEST_PAWN_BUDGET_SOL", 0, { min: 0, max: 1 }),
     maxPawnsPerMin: num("MAX_PAWNS_PER_MIN", 30, { min: 1, max: 600 }),
     gasBufferSol: num("GAS_BUFFER_SOL", 0.01, { min: 0.002 }),
     checkEveryMs: num("CHECK_EVERY_MIN", 60, { min: 1 }) * 60_000,
@@ -145,6 +147,7 @@ export function loadConfig(argv = process.argv.slice(2)) {
   if (mode === "live" && !c.liveConfirmed) {
     throw new Error("Mode live bloqué : mets LIVE_CONFIRMED=oui dans .env, une fois le live validé.");
   }
+  if (c.testPawnBudgetSol > 0 && !testRun) throw new Error("TEST_PAWN_BUDGET_SOL ne marche qu'en test (TEST_RUN=oui, voir README §11) : en vrai, les pawns sont payés par les creator fees seulement.");
   if (c.devSharePct > 0 && real && !c.devWallet) throw new Error("DEV_SHARE_PCT > 0 demande un DEV_WALLET.");
   if (c.devBagWallet && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(c.devBagWallet)) throw new Error(`DEV_BAG_WALLET="${c.devBagWallet}" n'est pas une adresse Solana.`);
   return c;
