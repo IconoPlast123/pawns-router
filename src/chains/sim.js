@@ -84,7 +84,7 @@ export function openSim(cfg, price) {
     // Like live: pawns #1-#30 bought by a voice that keeps VOICE_KEEP_PCT, then by fresh wallets.
     // Buyers here are made-up addresses, so the site can show them.
     async spawnPawn({ n, buyLamports }) {
-      const voice = n <= 30;
+      const voice = cfg.voices.enabled && n <= 30;
       const { rentLamports, networkLamports } = this.costEstimate();
       const rents = rentLamports * (voice ? 2 : 1);
       const cost = buyLamports + rents + networkLamports;

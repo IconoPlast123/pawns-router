@@ -9,6 +9,7 @@ const { pawnAddress } = await import("./chains/pawn.js");
 
 let cfg;
 try { cfg = loadConfig(); } catch (e) { console.error("ERREUR " + e.message); process.exit(1); }
+if (cfg.testRun) console.log("TEST · coin d'essai : chaque pawn par un wallet neuf, les 30 voix ne servent pas.\n");
 if (cfg.keyWarning) console.log("ATTENTION " + cfg.keyWarning + "\n");
 if (!cfg.routerAddress) {
   const { Keypair } = await import("@solana/web3.js");
@@ -61,9 +62,10 @@ try {
 
 chain.attach({ lut: () => live?.lut ?? null });
 const n = (live?.pawns?.length ?? 0) + 1;
+const voicesBuying = cfg.voices.enabled && n <= 30;
 
 // Pawns #1-#30 are bought by the voices: their keys file must open the published addresses.
-if (n <= 30) {
+if (voicesBuying) {
   try { chain.checkVoices(); console.log("VOIX   OK · les 30 clés ouvrent les adresses publiées des voix (aucune clé affichée)."); }
   catch (e) { ok = false; console.log(`VOIX   ÉCHEC · ${e.message}`); }
 }
@@ -73,7 +75,7 @@ const buyLamports = toLamports(cfg.pawnUsd / price.usd);
 const est = chain.costEstimate();
 const need = buyLamports + chain.reserveLamports(buyLamports) + 2 * est.rentLamports + 2 * est.networkLamports;
 const ui = (raw) => (Number(raw) / 10 ** chain.decimals).toLocaleString("fr-FR");
-for (const k of n <= 30 ? [n, 31] : [n]) {
+for (const k of voicesBuying ? [n, 31] : [n]) {
   if (balance < need) {
     console.log(`PAWN   #${k} pas testable pour l'instant · le router a ${toSol(balance)} SOL, un pawn en demande environ ${toSol(need)}.`);
     console.log("         Relance « npm run rehearse » quand les premières creator fees sont réclamées.");

@@ -19,12 +19,14 @@ const BANNER = {
   paused: "Mode PAUSED : lecture seule. Le router publie l'état et revérifie les pawns, il n'envoie rien."
 };
 log.info(BANNER[cfg.mode] + (cfg.fast ? " Horloges accélérées (--fast)." : ""));
+if (cfg.testRun) log.info("TEST sur un coin d'essai : chaque pawn est acheté par un wallet neuf (les 30 voix ne servent pas), " +
+  `ledger à part (${cfg.ledgerFile}), rien n'est publié en ligne.`);
 if (cfg.keyWarning) log.warn(cfg.keyWarning);
 
 // Public copy of state.json on a GitHub Gist (optional). A problem here never stops the router.
 let publisher = null;
 try {
-  const gist = loadGist();
+  const gist = cfg.testRun ? null : loadGist();
   if (gist) {
     if (gist.warning) log.warn(gist.warning);
     publisher = makePublisher(gist);
@@ -59,6 +61,13 @@ if (!L.router) {
     (cfg.real ? " Vérifie ROUTER_SECRET_KEY." : " Lance « npm run reset-dry-run » pour repartir de zéro."));
   process.exit(1);
 }
+// One ledger, one coin: the books of another coin (a test coin) never count toward this one.
+if (cfg.real && !L.mint) { L.mint = cfg.mint; ledger.save(); }
+else if (cfg.real && L.mint !== cfg.mint) {
+  log.error(`Le ledger (${cfg.ledgerFile}) appartient au coin ${L.mint}, pas à ${cfg.mint} (MINT). ` +
+    "Range ce ledger dans data\\archive\\ avant de lancer le router sur un autre coin.");
+  process.exit(1);
+}
 function recordPawn(r) {
   const pawn = ledger.addPawn({
     wallet: r.wallet, tokenAccount: r.tokenAccount, buyer: r.buyer, tokensRaw: r.tokensRaw, keptRaw: r.keptRaw ?? 0,
@@ -83,7 +92,7 @@ chain.attach?.({
 });
 
 // Pawns #1 to #30 are bought by the 30 voices: check their keys file before anything else.
-if (cfg.real && L.pawns.length < 30 && chain.checkVoices) {
+if (cfg.real && cfg.voices.enabled && L.pawns.length < 30 && chain.checkVoices) {
   try { chain.checkVoices(); log.info("Clés des voix vérifiées : chaque clé ouvre l'adresse publiée de sa voix."); }
   catch (e) {
     if (cfg.mode === "live") { log.error(`${e.message} Les pawns #1 à #30 ne peuvent être achetés que par leurs voix : le router s'arrête.`); process.exit(1); }

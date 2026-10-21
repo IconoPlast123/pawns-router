@@ -71,11 +71,16 @@ export function loadConfig(argv = process.argv.slice(2)) {
     try { key = readSecret("ROUTER_SECRET_KEY", "ROUTER_KEY_FILE", "La clé du router"); }
     catch (e) { if (mode === "live" || !str("ROUTER_ADDRESS")) throw e; }
   }
+  // TEST_RUN=oui (from .env.test, see README): a side test on a throwaway coin. Fresh wallets buy every pawn,
+  // so the 30 voices are never touched; its own ledger and log; nothing published online.
+  const testRun = real && str("TEST_RUN").toLowerCase() === "oui";
+  const world = real ? (testRun ? "test" : "live") : "dry_run";
 
   const c = {
     mode,
     real,
     fast,
+    testRun,
     rpcUrl: str("RPC_URL"),
     routerSecret: key.secret,
     keyWarning: key.warning,
@@ -100,6 +105,7 @@ export function loadConfig(argv = process.argv.slice(2)) {
     priorityFeeSol: num("PRIORITY_FEE_SOL", 0.00001, { min: 0, max: 0.01 }),
     slippagePct: num("SLIPPAGE_PCT", 10, { min: 0.5, max: 50 }),
     voices: {
+      enabled: !testRun,
       keysFile: expandHome(str("VOICES_KEYS_FILE") || "~/pawns-voices-wallets.csv"),
       addressesFile: path.resolve(ROOT, expandHome(str("VOICES_ADDRESSES_FILE") || "../docs/voices-wallets.md")),
       keepPct: num("VOICE_KEEP_PCT", 1, { min: 0, max: 10 })
@@ -108,10 +114,10 @@ export function loadConfig(argv = process.argv.slice(2)) {
     stateFile: file("STATE_FILE", "out/state.json"),
     previewPort: num("PREVIEW_PORT", 8787, { min: 0, max: 65535 }),
     siteFile: path.resolve(ROOT, "..", "index.html"),
-    // Simulation and reality never share a ledger: dry_run numbers can't leak into the live ledger.
-    ledgerFile: path.resolve(ROOT, "data", `ledger-${real ? "live" : "dry_run"}.json`),
+    // Simulation, test and reality never share a ledger: their numbers can't leak into the live ledger.
+    ledgerFile: path.resolve(ROOT, "data", `ledger-${world}.json`),
     simFile: path.resolve(ROOT, "data", "sim.json"),
-    logFile: path.resolve(ROOT, "data", `router-${real ? "live" : "dry_run"}.log`),
+    logFile: path.resolve(ROOT, "data", `router-${world}.log`),
     pauseFile: path.resolve(ROOT, "PAUSE"),
 
     sim: {
@@ -133,7 +139,7 @@ export function loadConfig(argv = process.argv.slice(2)) {
     c.sim.volumeUsdPerHour *= 8; // fees pile up faster, so the CLAIM_MIN_USD threshold is reached every minute or so
   }
 
-  if (real && synced(c.voices.keysFile)) c.keyWarning = [c.keyWarning, `Les clés des voix (${c.voices.keysFile}) sont dans un dossier synchronisé dans le cloud, qui en garde une copie. Range ce fichier ailleurs.`].filter(Boolean).join(" ");
+  if (real && c.voices.enabled && synced(c.voices.keysFile)) c.keyWarning = [c.keyWarning, `Les clés des voix (${c.voices.keysFile}) sont dans un dossier synchronisé dans le cloud, qui en garde une copie. Range ce fichier ailleurs.`].filter(Boolean).join(" ");
   if (real) checkReal(c);
   if (mode === "live" && !c.routerSecret) throw new Error("Pas de clé du router : remplis ROUTER_KEY_FILE dans .env (obligatoire en live).");
   if (mode === "live" && !c.liveConfirmed) {

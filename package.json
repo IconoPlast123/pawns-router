@@ -14,6 +14,8 @@
     "rehearse": "node --env-file-if-exists=.env src/rehearse.js",
     "verify": "node --env-file-if-exists=.env src/verify-pawns.js",
     "publish-test": "node --env-file-if-exists=.env src/publish-test.js",
+    "test:rehearse": "node --env-file-if-exists=.env --env-file=.env.test src/rehearse.js",
+    "test:start": "node --env-file-if-exists=.env --env-file=.env.test src/index.js",
     "pause": "node -e \"require('fs').writeFileSync('PAUSE', 'Router paused by hand. Delete this file (npm run resume) to resume.\\n')\"",
     "resume": "node -e \"require('fs').rmSync('PAUSE', { force: true })\"",
     "reset-dry-run": "node -e \"for (const f of ['data/ledger-dry_run.json','data/sim.json','out/state.json']) require('fs').rmSync(f, { force: true })\""

@@ -177,8 +177,9 @@ export function openLive(cfg) {
 
   // Who buys pawn #n: voice #n for the first 30 (its key from VOICES_KEYS_FILE, checked against the public list),
   // then a brand-new wallet, made in memory, never written anywhere, forgotten after the transaction.
+  // In a test run (voices off) every pawn gets a brand-new wallet.
   function buyerFor(n, needKey) {
-    if (n <= VOICE_COUNT) {
+    if (cfg.voices.enabled && n <= VOICE_COUNT) {
       if (!needKey) return { publicKey: new PublicKey(voiceAddresses(cfg.voices.addressesFile).get(n)), voice: true };
       let kp;
       try { kp = loadVoiceKeys(cfg.voices, [n]).get(n); }
