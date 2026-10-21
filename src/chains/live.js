@@ -31,6 +31,10 @@ export function openLive(cfg) {
   const connection = new Connection(cfg.rpcUrl, "confirmed");
   // Without the secret key (paused mode, rehearsal) the router can read and simulate, never sign.
   const signer = cfg.routerSecret ? parseSecret(cfg.routerSecret) : null;
+  // The key must open ROUTER_ADDRESS: the router never signs with another wallet than the one written in .env.
+  if (signer && cfg.routerAddress && signer.publicKey.toBase58() !== cfg.routerAddress) {
+    throw new Error(`La clé de ROUTER_KEY_FILE ouvre le wallet ${signer.publicKey.toBase58()}, pas ROUTER_ADDRESS (${cfg.routerAddress}). Le router ne signe qu'avec le wallet attendu.`);
+  }
   const router = { publicKey: signer ? signer.publicKey : new PublicKey(cfg.routerAddress) };
   const mint = new PublicKey(cfg.mint);
   const priorityLamports = toLamports(cfg.priorityFeeSol);
