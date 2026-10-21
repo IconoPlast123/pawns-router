@@ -51,7 +51,7 @@ export function buildState({
     // Fees waiting in pump.fun (last simulation) and the claim rule: claim at minUsd, or after maxWaitH hours.
     claim: {
       pendingSol: sol(claim.pendingLamports), minUsd: claim.minUsd, maxWaitH: claim.maxWaitH,
-      lastAt: L.claims.at(-1)?.at ?? null, checkedAt: claim.checkedAt
+      lastAt: L.claims.at(-1)?.at ?? null, checkedAt: claim.checkedAt, count: L.claims.length
     },
     // The last 10 claims, newest first, from the ledger.
     claims: L.claims.slice(-10).reverse().map((c) => ({ at: c.at, sol: sol(c.lamports), tx: c.tx })),

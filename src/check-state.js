@@ -7,7 +7,7 @@ import { ROOT } from "./config.js";
 
 const SHAPE = {
   top: ["mode", "updatedAt", "solUsd", "supply", "pawnUsd", "router", "fees", "pawns", "nextPawnSol", "history", "latest", "claim", "claims", "dev"],
-  claim: ["pendingSol", "minUsd", "maxWaitH", "lastAt", "checkedAt"],
+  claim: ["pendingSol", "minUsd", "maxWaitH", "lastAt", "checkedAt", "count"],
   claims: ["at", "sol", "tx"],
   dev: ["address", "tokens", "checkedAt"],
   router: ["address", "sol"],
@@ -80,7 +80,7 @@ else {
 // Claim rule and claim history.
 const msOrNull = (v) => v === null || (isNum(v) && v > 0);
 keys(S.claim, SHAPE.claim, "claim");
-nums(S.claim, ["pendingSol", "minUsd", "maxWaitH"], "claim");
+nums(S.claim, ["pendingSol", "minUsd", "maxWaitH", "count"], "claim");
 if (S.claim && (!msOrNull(S.claim.lastAt) || !msOrNull(S.claim.checkedAt))) fail("claim.lastAt et claim.checkedAt : une date en millisecondes, ou null.");
 if (!Array.isArray(S.claims)) fail("claims doit être une liste.");
 else {
