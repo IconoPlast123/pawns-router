@@ -37,16 +37,14 @@ export function buildState({
       count: pawns.length,
       tokens: round(pawns.reduce((s, p) => s + p.lastRaw, 0) / unit, 2),
       usd: round(pawns.reduce((s, p) => s + p.usd, 0), 2),
-      sold: L.check.sold,
-      kept: round(pawns.reduce((s, p) => s + (p.keptRaw ?? 0), 0) / unit, 2)
+      sold: L.check.sold
     },
     nextPawnSol: sol(nextPawnLamports),
     history: points.map((p) => ({ t: p.t, receivedSol: sol(p.receivedLamports), sentSol: sol(p.sentLamports), pawns: p.pawns })),
-    // buyer: the wallet that bought this pawn (a Season 1 voice for #1-#30, then a fresh wallet);
-    // kept: what that buyer kept (only voices, VOICE_KEEP_PCT, so they can comment on pump.fun).
+    // buyer: the brand-new wallet that bought this pawn and ended empty.
     latest: pawns.slice(-10).reverse().map((p) => ({
       n: p.n, wallet: p.wallet, tokens: round(p.tokensRaw / unit, 2), usd: round(p.usd, 2), sol: sol(p.buyLamports), at: p.at, tx: p.tx,
-      buyer: p.buyer ?? "", kept: round((p.keptRaw ?? 0) / unit, 2)
+      buyer: p.buyer ?? ""
     })),
     // Fees waiting in pump.fun (last simulation) and the claim rule: claim at minUsd, or after maxWaitH hours.
     claim: {

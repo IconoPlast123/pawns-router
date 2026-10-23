@@ -25,10 +25,9 @@ Funding, buy and lock happen in **one transaction**, signed by the router and th
 
 ## Who buys each pawn
 
-Every pawn has its own buyer, so pump.fun shows a different wallet on each pawn buy. These are not outside traders: the website lists every buyer next to its pawn.
+Every pawn, from #1, has its own buyer: a wallet created for that single transaction, so pump.fun shows a different wallet on each pawn buy. These are not outside traders: the website lists every buyer next to its pawn. The router funds the buyer with exactly the price of the buy, and the tokens land straight in the pawn: the buyer never holds a token and ends with 0 SOL. Its key only ever lives in memory.
 
-- **Pawns #31 and up**: a wallet created for that single transaction. The router funds it with exactly the price of the buy, and the tokens land straight in the pawn: the buyer never holds a token and ends with 0 SOL. Its key only ever lives in memory.
-- **Pawns #1 to #30**: the wallets of the 30 Season 1 voices, labeled team accounts that each post one thesis on pump.fun. pump.fun only lets wallets that bought the coin comment, so each voice keeps a sliver of its pawn's buy (`VOICE_KEEP_PCT`, 1% by default). That sliver has a key and could be sold. The ledger shows it. Before signing, the router simulates every transaction on mainnet. It refuses unless the tokens land in a keyless pawn address and the cost is what it expects (see [`src/chains/guard.js`](src/chains/guard.js)).
+Before signing, the router simulates every transaction on mainnet. It refuses unless the tokens land in a keyless pawn address and the cost is what it expects (see [`src/chains/guard.js`](src/chains/guard.js)).
 
 ## Check it yourself
 

@@ -12,9 +12,9 @@ const SHAPE = {
   dev: ["address", "tokens", "checkedAt"],
   router: ["address", "sol"],
   fees: ["receivedSol", "buysSol", "networkSol", "devSol"],
-  pawns: ["count", "tokens", "usd", "sold", "kept"],
+  pawns: ["count", "tokens", "usd", "sold"],
   history: ["t", "receivedSol", "sentSol", "pawns"],
-  latest: ["n", "wallet", "tokens", "usd", "sol", "at", "tx", "buyer", "kept"]
+  latest: ["n", "wallet", "tokens", "usd", "sol", "at", "tx", "buyer"]
 };
 const MODES = ["preview", "dry_run", "live", "paused"];
 
@@ -68,10 +68,9 @@ else {
   if (S.latest.length > 10) notes.push(`latest contient ${S.latest.length} pawns (decisions.md en prévoit ~10).`);
   S.latest.forEach((p, i) => {
     keys(p, SHAPE.latest, `latest[${i}]`);
-    nums(p, ["n", "tokens", "usd", "sol", "at", "kept"], `latest[${i}]`);
+    nums(p, ["n", "tokens", "usd", "sol", "at"], `latest[${i}]`);
     if (typeof p.wallet !== "string" || typeof p.tx !== "string" || typeof p.buyer !== "string") fail(`latest[${i}].wallet, .tx et .buyer doivent être des textes.`);
     if (p.buyer && p.buyer === p.wallet) fail(`latest[${i}] : l'acheteur ne peut pas être le pawn lui-même.`);
-    if (p.n > 30 && p.kept > 0) fail(`latest[${i}] : seules les voix (pawns #1 à #30) gardent des tokens.`);
     const prev = S.latest[i - 1];
     if (prev && (p.n >= prev.n || p.at > prev.at)) fail(`latest[${i}] : du plus récent au plus ancien.`);
   });

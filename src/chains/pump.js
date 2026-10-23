@@ -86,21 +86,18 @@ export function makePump(connection, mint, tokenProgram) {
     curve,
 
     // Pawn #n in one all-or-nothing transaction, signed by the router (fee payer) and the buyer:
-    //   the router hands the buyer exactly `lamports`, opens the pawn's token account (and, for a voice, the
-    //   voice's own), pays the buyer's pump.fun volume accumulator;
-    //   the buyer spends exactly that SOL ("exact SOL in" buys): the tokens land straight in the keyless pawn's
-    //   token account, a voice's `keepPct` share in the voice's own account;
+    //   the router hands the buyer exactly `lamports`, opens the pawn's token account, pays the buyer's
+    //   pump.fun volume accumulator;
+    //   the buyer spends exactly that SOL ("exact SOL in" buy): the tokens land straight in the keyless pawn's
+    //   token account;
     //   the buyer closes its accumulator and its wrapped-SOL account, and everything goes back to the router.
-    // A fresh buyer ends with 0 lamport and no token account. On the bonding curve while it runs, in the
-    // canonical PumpSwap pool once the coin has graduated.
-    async pawnPlan({ router, buyer, n, lamports, slippagePct, keepPct = 0 }) {
+    // The buyer, a brand-new wallet, ends with 0 lamport and no token account. On the bonding curve while it
+    // runs, in the canonical PumpSwap pool once the coin has graduated.
+    async pawnPlan({ router, buyer, n, lamports, slippagePct }) {
       const holder = pawnAddress(mint, n);
       const holderAta = ataOf(holder, mint, tokenProgram);
       const buyerAta = ataOf(buyer, mint, tokenProgram);
-      const keep = keepPct > 0 ? Math.floor(lamports * keepPct / 100) : 0;
-      const parts = keep > 0 ? [{ lamports: lamports - keep, dest: holderAta }, { lamports: keep, dest: buyerAta }] : [{ lamports, dest: holderAta }];
-      const pre = [createAtaIdempotent(router, holderAta, holder, mint, tokenProgram)];
-      if (keep > 0) pre.push(createAtaIdempotent(router, buyerAta, buyer, mint, tokenProgram));
+      const openPawn = createAtaIdempotent(router, holderAta, holder, mint, tokenProgram);
 
       const st = await online.fetchBuyState(mint, buyer, tokenProgram);
       const bc = st.bondingCurve;
@@ -110,30 +107,26 @@ export function makePump(connection, mint, tokenProgram) {
         const uva = pumpUvaPda(buyer);
         const uvaExists = !!(await connection.getAccountInfo(uva, "confirmed"));
         const { global, feeConfig } = await config();
-        const buys = [];
-        for (const part of parts) {
-          const expected = getBuyV3TokenAmountFromQuoteAmount({ global, feeConfig, mintSupply: bc.tokenTotalSupply, bondingCurve: bc, amount: new BN(part.lamports), curveBaseTokenBalance: st.curveBaseTokenBalance });
-          if (expected.lten(0)) throw new Error("La bonding curve ne vend plus de tokens (migration en cours ?).");
-          const ixs = await PUMP_SDK.buyExactQuoteInV3Instructions({
-            bondingCurve: bc, associatedUserAccountInfo: {}, mint, user: buyer, amount: expected, quoteAmount: new BN(part.lamports),
-            slippage: slippagePct, tokenProgram, quoteTokenProgram: st.quoteTokenProgram
-          });
-          if (ixs.length !== 1) throw new Error("Le SDK pump.fun a changé : achat inattendu, refusé.");
-          const slot = ixs[0].keys.find((k) => k.pubkey.equals(buyerAta));
-          if (!slot) throw new Error("Le SDK pump.fun a changé : compte de destination introuvable, refusé.");
-          slot.pubkey = part.dest;
-          buys.push({ ix: ixs[0], min: lessSlippage(expected, slippagePct) });
-        }
+        const expected = getBuyV3TokenAmountFromQuoteAmount({ global, feeConfig, mintSupply: bc.tokenTotalSupply, bondingCurve: bc, amount: new BN(lamports), curveBaseTokenBalance: st.curveBaseTokenBalance });
+        if (expected.lten(0)) throw new Error("La bonding curve ne vend plus de tokens (migration en cours ?).");
+        const ixs = await PUMP_SDK.buyExactQuoteInV3Instructions({
+          bondingCurve: bc, associatedUserAccountInfo: {}, mint, user: buyer, amount: expected, quoteAmount: new BN(lamports),
+          slippage: slippagePct, tokenProgram, quoteTokenProgram: st.quoteTokenProgram
+        });
+        if (ixs.length !== 1) throw new Error("Le SDK pump.fun a changé : achat inattendu, refusé.");
+        const slot = ixs[0].keys.find((k) => k.pubkey.equals(buyerAta));
+        if (!slot) throw new Error("Le SDK pump.fun a changé : compte de destination introuvable, refusé.");
+        slot.pubkey = holderAta; // the tokens go to the pawn, never to the buyer
         const rent = uvaExists ? 0 : await measureUvaRent("curve", router);
         return {
-          venue: "bonding curve", holder, holderAta, buyerAta, keepAta: keep > 0 ? buyerAta : null,
-          minPawnTokens: buys[0].min, buyerWsol: null, uvas: uvaExists ? [] : [uva],
+          venue: "bonding curve", holder, holderAta, buyerAta,
+          minPawnTokens: lessSlippage(expected, slippagePct), buyerWsol: null, uvas: uvaExists ? [] : [uva],
           perPawn: [holder, holderAta, buyer, buyerAta, uva],
           ixs: [
             SystemProgram.transfer({ fromPubkey: router, toPubkey: buyer, lamports }),
-            ...pre,
+            openPawn,
             ...(uvaExists ? [] : [await PUMP_SDK.initUserVolumeAccumulator({ payer: router, user: buyer })]),
-            ...buys.map((b) => b.ix),
+            ixs[0],
             ...(uvaExists ? [] : [await PUMP_SDK.closeUserVolumeAccumulator(buyer), SystemProgram.transfer({ fromPubkey: buyer, toPubkey: router, lamports: rent })])
           ]
         };
@@ -147,36 +140,32 @@ export function makePump(connection, mint, tokenProgram) {
       const wsolExists = !!s.userQuoteAccountInfo;
       const uva = ammUvaPda(buyer);
       const uvaExists = !!(await connection.getAccountInfo(uva, "confirmed"));
-      const buys = [];
-      for (const part of parts) {
-        const { base } = buyQuoteInput({
-          quote: new BN(part.lamports), slippage: slippagePct, baseReserve: s.poolBaseAmount, quoteReserve: s.poolQuoteAmount,
-          virtualQuoteReserves: s.pool.virtualQuoteReserves, globalConfig: s.globalConfig, baseMintAccount: s.baseMintAccount,
-          baseMint: s.baseMint, coinCreator: s.pool.coinCreator, creator: s.pool.creator, feeConfig: s.feeConfig,
-          quoteMint: s.pool.quoteMint, isMayhemMode: s.pool.isMayhemMode, creatorFeeBps: s.pool.creatorFeeBps
-        });
-        const acc = PUMP_AMM_SDK.swapAccounts(s);
-        acc.userBaseTokenAccount = part.dest;
-        acc.userQuoteTokenAccount = buyerWsol;
-        const rem = [];
-        if (!s.pool.coinCreator.equals(PublicKey.default)) rem.push({ pubkey: poolV2Pda(s.pool.baseMint), isWritable: false, isSigner: false });
-        rem.push({ pubkey: acc.buybackFeeRecipient, isWritable: false, isSigner: false }, { pubkey: acc.buybackFeeRecipientTokenAccount, isWritable: true, isSigner: false });
-        const min = lessSlippage(base, slippagePct);
-        const ix = await PUMP_AMM_SDK.offlineProgram.methods.buyExactQuoteIn(new BN(part.lamports), min, { 0: true }).accounts(acc).remainingAccounts(rem).instruction();
-        buys.push({ ix, min });
-      }
+      const { base } = buyQuoteInput({
+        quote: new BN(lamports), slippage: slippagePct, baseReserve: s.poolBaseAmount, quoteReserve: s.poolQuoteAmount,
+        virtualQuoteReserves: s.pool.virtualQuoteReserves, globalConfig: s.globalConfig, baseMintAccount: s.baseMintAccount,
+        baseMint: s.baseMint, coinCreator: s.pool.coinCreator, creator: s.pool.creator, feeConfig: s.feeConfig,
+        quoteMint: s.pool.quoteMint, isMayhemMode: s.pool.isMayhemMode, creatorFeeBps: s.pool.creatorFeeBps
+      });
+      const acc = PUMP_AMM_SDK.swapAccounts(s);
+      acc.userBaseTokenAccount = holderAta; // the tokens go to the pawn, never to the buyer
+      acc.userQuoteTokenAccount = buyerWsol;
+      const rem = [];
+      if (!s.pool.coinCreator.equals(PublicKey.default)) rem.push({ pubkey: poolV2Pda(s.pool.baseMint), isWritable: false, isSigner: false });
+      rem.push({ pubkey: acc.buybackFeeRecipient, isWritable: false, isSigner: false }, { pubkey: acc.buybackFeeRecipientTokenAccount, isWritable: true, isSigner: false });
+      const min = lessSlippage(base, slippagePct);
+      const buy = await PUMP_AMM_SDK.offlineProgram.methods.buyExactQuoteIn(new BN(lamports), min, { 0: true }).accounts(acc).remainingAccounts(rem).instruction();
       const rent = uvaExists ? 0 : await measureUvaRent("pool", router);
       return {
-        venue: "PumpSwap", holder, holderAta, buyerAta, keepAta: keep > 0 ? buyerAta : null,
-        minPawnTokens: buys[0].min, buyerWsol, wsolExists, uvas: uvaExists ? [] : [uva],
+        venue: "PumpSwap", holder, holderAta, buyerAta,
+        minPawnTokens: min, buyerWsol, wsolExists, uvas: uvaExists ? [] : [uva],
         perPawn: [holder, holderAta, buyer, buyerAta, buyerWsol, uva],
         ixs: [
           createAtaIdempotent(router, buyerWsol, buyer, WSOL, TOKEN),
           SystemProgram.transfer({ fromPubkey: router, toPubkey: buyerWsol, lamports }),
           syncNative(buyerWsol),
-          ...pre,
+          openPawn,
           ...(uvaExists ? [] : [await PUMP_AMM_SDK.initUserVolumeAccumulator({ payer: router, user: buyer })]),
-          ...buys.map((b) => b.ix),
+          buy,
           ...(wsolExists ? [] : [closeAccount(buyerWsol, router, buyer)]),
           ...(uvaExists ? [] : [await PUMP_AMM_SDK.closeUserVolumeAccumulator(buyer), SystemProgram.transfer({ fromPubkey: buyer, toPubkey: router, lamports: rent })])
         ]

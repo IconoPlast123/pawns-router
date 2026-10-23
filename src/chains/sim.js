@@ -77,30 +77,23 @@ export function openSim(cfg, price) {
     },
 
     // Per pawn, like live: the pawn's token account rent and one transaction with two signatures
-    // (router + buyer). A voice's own token account is one more rent, kept in hand beforehand.
+    // (router + buyer).
     costEstimate() { return { rentLamports: RENT_TOKEN_ACCOUNT, networkLamports: txFee + SIG_FEE }; },
-    reserveLamports() { return RENT_TOKEN_ACCOUNT; },
 
-    // Like live: pawns #1-#30 bought by a voice that keeps VOICE_KEEP_PCT, then by fresh wallets.
-    // Buyers here are made-up addresses, so the site can show them.
+    // Like live: every pawn bought by a fresh wallet. Buyers here are made-up addresses, so the site can show them.
     async spawnPawn({ n, buyLamports }) {
-      const voice = cfg.voices.enabled && n <= 30;
       const { rentLamports, networkLamports } = this.costEstimate();
-      const rents = rentLamports * (voice ? 2 : 1);
-      const cost = buyLamports + rents + networkLamports;
+      const cost = buyLamports + rentLamports + networkLamports;
       if (S.routerLamports < cost) throw new Error("Router simulé à court de SOL.");
       const usdIn = buyLamports / 1e9 * price.usd * (1 - PUMP_FEE);
-      const bought = Math.floor(usdIn / (S.mcapUsd / SUPPLY_RAW));
-      const keptRaw = voice ? Math.floor(bought * cfg.voices.keepPct / 100) : 0;
-      const tokensRaw = bought - keptRaw;
+      const tokensRaw = Math.floor(usdIn / (S.mcapUsd / SUPPLY_RAW));
       const wallet = pawnAddress(S.mint, n).toBase58();
       const tokenAccount = ataOf(wallet, S.mint).toBase58();
-      const buyer = voice ? ((S.voices ??= {})[n] ??= freshAddress()) : freshAddress();
       S.routerLamports -= cost;
       S.balances[tokenAccount] = tokensRaw;
       S.mcapUsd += usdIn;
       save();
-      return { wallet, tokenAccount, buyer, tokensRaw, keptRaw, buyLamports, networkLamports: rents + networkLamports, tx: "" };
+      return { wallet, tokenAccount, buyer: freshAddress(), tokensRaw, buyLamports, networkLamports: rentLamports + networkLamports, tx: "" };
     },
 
     async pawnBalances(pawns) { return pawns.map((p) => S.balances[p.tokenAccount] ?? 0); },

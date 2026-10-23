@@ -19,8 +19,7 @@ const BANNER = {
   paused: "Mode PAUSED : lecture seule. Le router publie l'état et revérifie les pawns, il n'envoie rien."
 };
 log.info(BANNER[cfg.mode] + (cfg.fast ? " Horloges accélérées (--fast)." : ""));
-if (cfg.testRun) log.info("TEST sur un coin d'essai : chaque pawn est acheté par un wallet neuf (les 30 voix ne servent pas), " +
-  `ledger à part (${cfg.ledgerFile}), rien n'est publié en ligne.` +
+if (cfg.testRun) log.info(`TEST sur un coin d'essai : ledger à part (${cfg.ledgerFile}), rien n'est publié en ligne.` +
   (cfg.testPawnBudgetSol ? ` Jusqu'à ${cfg.testPawnBudgetSol} SOL déposés à la main peuvent payer des pawns (TEST_PAWN_BUDGET_SOL).` : ""));
 if (cfg.keyWarning) log.warn(cfg.keyWarning);
 
@@ -71,13 +70,12 @@ else if (cfg.real && L.mint !== cfg.mint) {
 }
 function recordPawn(r) {
   const pawn = ledger.addPawn({
-    wallet: r.wallet, tokenAccount: r.tokenAccount, buyer: r.buyer, tokensRaw: r.tokensRaw, keptRaw: r.keptRaw ?? 0,
+    wallet: r.wallet, tokenAccount: r.tokenAccount, buyer: r.buyer, tokensRaw: r.tokensRaw,
     buyLamports: r.buyLamports, networkLamports: r.networkLamports,
     usd: round(toSol(r.buyLamports) * price.usd, 4), at: r.at ?? Date.now(), tx: r.tx
   });
   const ui = (raw) => Math.round(raw / 10 ** L.decimals).toLocaleString("fr-FR");
-  const kept = pawn.keptRaw ? ` (la voix en garde ${ui(pawn.keptRaw)})` : "";
-  log.info(`Pawn #${pawn.n} : ${ui(r.tokensRaw)} $PAWNS pour ${toSol(r.buyLamports).toFixed(4)} SOL${kept} · pawn ${r.wallet} · acheteur ${r.buyer}${solscan(r.tx)}`);
+  log.info(`Pawn #${pawn.n} : ${ui(r.tokensRaw)} $PAWNS pour ${toSol(r.buyLamports).toFixed(4)} SOL · pawn ${r.wallet} · acheteur ${r.buyer}${solscan(r.tx)}`);
 }
 function solscan(tx) { return tx ? ` · https://solscan.io/tx/${tx}` : ""; }
 
@@ -91,15 +89,6 @@ chain.attach?.({
     log.info(`Coût réseau : ${toSol(lamports)} SOL (${why}).${solscan(tx)}`);
   }
 });
-
-// Pawns #1 to #30 are bought by the 30 voices: check their keys file before anything else.
-if (cfg.real && cfg.voices.enabled && L.pawns.length < 30 && chain.checkVoices) {
-  try { chain.checkVoices(); log.info("Clés des voix vérifiées : chaque clé ouvre l'adresse publiée de sa voix."); }
-  catch (e) {
-    if (cfg.mode === "live") { log.error(`${e.message} Les pawns #1 à #30 ne peuvent être achetés que par leurs voix : le router s'arrête.`); process.exit(1); }
-    log.warn(e.message);
-  }
-}
 
 // A pawn whose transaction was sent but not confirmed when something went wrong:
 // ask the chain whether it landed, and book it if it did. If we can't tell, stay stopped.
@@ -234,8 +223,7 @@ async function maybeSpawn() {
   // of the deposits may pay for pawns too, to test them without trading volume.
   const T = L.totals, testBudget = Math.min(T.depositsLamports, toLamports(cfg.testPawnBudgetSol));
   const waiting = T.receivedLamports + testBudget - T.buysLamports - T.networkLamports - T.devLamports;
-  const need = nextLamports + (chain.reserveLamports?.(buyLamports) ?? 0);
-  if (waiting < need || t.routerLamports - bufferLamports < need) return;
+  if (waiting < nextLamports || t.routerLamports - bufferLamports < nextLamports) return;
   t.lastPawnAt = Date.now();
   try {
     const r = await chain.spawnPawn({
@@ -248,11 +236,7 @@ async function maybeSpawn() {
     ledger.save();
     t.failures = 0;
   } catch (e) {
-    if (e.fatal) {
-      // e.g. a voice's key missing or not matching: never buy that pawn with another wallet.
-      t.halted = true;
-      log.error(`${e.message} Plus de pawns tant que ce n'est pas réglé : corrige, puis relance le router.`);
-    } else if (!L.pending) {
+    if (!L.pending) {
       // Refused before anything was sent (simulation, checks, RPC): nothing spent. Try again in a minute.
       log.warn(`Pawn pas créé, rien n'a été envoyé : ${e.message} Nouvel essai dans 1 min.`);
       t.lastPawnAt = Date.now() + 60_000;

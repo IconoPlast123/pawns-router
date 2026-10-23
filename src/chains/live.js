@@ -5,7 +5,6 @@ import {
 } from "@solana/web3.js";
 import { inspect, simulate, tokenAmount, PROGRAMS } from "./guard.js";
 import { makePump } from "./pump.js";
-import { VOICE_COUNT, forget, loadVoiceKeys, voiceAddresses } from "../voices.js";
 import { log } from "../log.js";
 import { sleep, toLamports, toSol } from "../util.js";
 
@@ -25,7 +24,10 @@ function parseSecret(s) {
   }
 }
 
-const fatal = (msg) => Object.assign(new Error(msg), { fatal: true });
+// Wipe a buyer's secret key from memory once its transaction is done (best effort).
+function forget(kp) {
+  try { kp?._keypair?.secretKey?.fill(0); } catch { /* best effort */ }
+}
 
 export function openLive(cfg) {
   const connection = new Connection(cfg.rpcUrl, "confirmed");
@@ -96,15 +98,15 @@ export function openLive(cfg) {
     return i < 0 ? 0n : amount(confirmed.meta.postTokenBalances) - amount(confirmed.meta.preTokenBalances);
   }
 
-  // A confirmed pawn transaction, turned into the ledger's numbers. Token account rents (the pawn's, and a
-  // voice's the first time) and the fee are network costs; everything else the router paid is the buy.
+  // A confirmed pawn transaction, turned into the ledger's numbers. The pawn's token account rent and the fee
+  // are network costs; everything else the router paid is the buy.
   function pawnResult(confirmed, p) {
     const fee = confirmed.meta.fee;
-    const rentPaid = deltaOf(confirmed, p.holderAta) + (p.keepAta ? deltaOf(confirmed, p.keepAta) : 0);
+    const rentPaid = deltaOf(confirmed, p.holderAta);
     const spent = -deltaOf(confirmed, router.publicKey);
     return {
       wallet: p.holder, tokenAccount: p.holderAta, buyer: p.buyer,
-      tokensRaw: Number(tokensGained(confirmed, p.holderAta)), keptRaw: p.keepAta ? Number(tokensGained(confirmed, p.keepAta)) : 0,
+      tokensRaw: Number(tokensGained(confirmed, p.holderAta)),
       buyLamports: spent - fee - rentPaid, networkLamports: fee + rentPaid,
       at: (confirmed.blockTime ?? Date.now() / 1000) * 1000, tx: p.signature
     };
@@ -179,19 +181,10 @@ export function openLive(cfg) {
     return tx;
   }
 
-  // Who buys pawn #n: voice #n for the first 30 (its key from VOICES_KEYS_FILE, checked against the public list),
-  // then a brand-new wallet, made in memory, never written anywhere, forgotten after the transaction.
-  // In a test run (voices off) every pawn gets a brand-new wallet.
-  function buyerFor(n, needKey) {
-    if (cfg.voices.enabled && n <= VOICE_COUNT) {
-      if (!needKey) return { publicKey: new PublicKey(voiceAddresses(cfg.voices.addressesFile).get(n)), voice: true };
-      let kp;
-      try { kp = loadVoiceKeys(cfg.voices, [n]).get(n); }
-      catch (e) { throw fatal(e.message); }
-      return { keypair: kp, publicKey: kp.publicKey, voice: true };
-    }
+  // Who buys each pawn: a brand-new wallet, made in memory, never written anywhere, forgotten after the transaction.
+  function newBuyer() {
     const kp = Keypair.generate();
-    return { keypair: kp, publicKey: kp.publicKey, voice: false };
+    return { keypair: kp, publicKey: kp.publicKey };
   }
 
   return {
@@ -217,9 +210,6 @@ export function openLive(cfg) {
       if (bc.isMayhemMode) log.warn("Ce coin est en « mayhem mode » : non testé avec le router.");
       return { routerAddress: router.publicKey.toBase58() };
     },
-
-    // Checks the voices' keys file against the public list. Throws with a clear message, never shows a key.
-    checkVoices() { loadVoiceKeys(cfg.voices, []); },
 
     async routerLamports() { return connection.getBalance(router.publicKey, "confirmed"); },
 
@@ -255,15 +245,12 @@ export function openLive(cfg) {
 
     // One pawn = one transaction with two signatures, plus the pawn's token account rent.
     costEstimate() { return { rentLamports: rent, networkLamports: 2 * SIG_FEE + priorityLamports }; },
-    // Kept in hand before a pawn: a voice's own token account, opened by the router the first time.
-    reserveLamports() { return rent; },
 
     // Build, check and simulate pawn #n on the real chain (nothing is sent). Refused unless the simulation shows:
-    // the pawn's keyless account receiving the tokens; a fresh buyer left with 0 lamport and no account;
-    // a voice keeping at most VOICE_KEEP_PCT of the tokens and no SOL; the router paying no more than planned.
-    async previewPawn(n, buyLamports, buyer = buyerFor(n, false), canExtend = false) {
-      const keepPct = buyer.voice ? cfg.voices.keepPct : 0;
-      const plan = await pump.pawnPlan({ router: router.publicKey, buyer: buyer.publicKey, n, lamports: buyLamports, slippagePct: cfg.slippagePct, keepPct });
+    // the pawn's keyless account receiving the tokens; the buyer left with 0 lamport and no account;
+    // the router paying no more than planned.
+    async previewPawn(n, buyLamports, buyer = newBuyer(), canExtend = false) {
+      const plan = await pump.pawnPlan({ router: router.publicKey, buyer: buyer.publicKey, n, lamports: buyLamports, slippagePct: cfg.slippagePct });
       const tx = await compilePawn(plan, buyer.publicKey, canExtend);
       inspect(tx, router, buyer.publicKey);
       const watch = [router.publicKey, buyer.publicKey, plan.holderAta, plan.buyerAta];
@@ -279,32 +266,25 @@ export function openLive(cfg) {
       if (b.delta !== 0) refuse(`l'acheteur finirait avec ${b.delta} lamports de plus ou de moins`);
       if (uvaAt.some((i) => res[i].after !== 0)) refuse("le compte « volume accumulator » de l'acheteur ne serait pas refermé");
       if (wsolAt >= 0 && (plan.wsolExists ? res[wsolAt].delta !== 0 : res[wsolAt].after !== 0)) refuse("il resterait du SOL dans le compte WSOL de l'acheteur");
-      let kept = 0n;
-      if (buyer.voice) {
-        kept = tokenAmount(k.data) - tokenAmount(k.beforeData);
-        // kept / (kept + pawn) must stay within VOICE_KEEP_PCT (plus one token unit of rounding)
-        if (kept * 10000n > (kept + pawnTokens) * BigInt(Math.round(cfg.voices.keepPct * 100)) + 10000n) refuse(`la voix garderait ${kept} tokens, plus que ${cfg.voices.keepPct} %`);
-      } else {
-        if (b.after !== 0) refuse(`l'acheteur garderait ${b.after} lamports`);
-        if (k.after !== 0) refuse("l'acheteur garderait un compte token");
-      }
-      const ceiling = buyLamports + 2 * rent + 2 * txFee + 2_000_000;
+      if (b.after !== 0) refuse(`l'acheteur garderait ${b.after} lamports`);
+      if (k.after !== 0) refuse("l'acheteur garderait un compte token");
+      const ceiling = buyLamports + rent + 2 * txFee + 2_000_000;
       if (-r.delta > ceiling) refuse(`le pawn coûterait ${toSol(-r.delta)} SOL au router, plafond ${toSol(ceiling)} SOL`);
-      return { tx, plan, buyer, pawnTokens, kept, costLamports: -r.delta };
+      return { tx, plan, buyer, pawnTokens, costLamports: -r.delta };
     },
 
     async spawnPawn({ n, buyLamports, onPending }) {
-      const buyer = buyerFor(n, true);
+      const buyer = newBuyer();
       try {
         const { tx, plan } = await this.previewPawn(n, buyLamports, buyer, true);
         const s = await sign(tx, [buyer.keypair]);
         const pending = {
           n, signature: s.signature, lastValidBlockHeight: s.lastValidBlockHeight, at: Date.now(), buyer: buyer.publicKey.toBase58(),
-          holder: plan.holder.toBase58(), holderAta: plan.holderAta.toBase58(), keepAta: plan.keepAta?.toBase58() ?? null
+          holder: plan.holder.toBase58(), holderAta: plan.holderAta.toBase58()
         };
         onPending(pending);
         const confirmed = await sendAndConfirm(tx, s);
-        log.info(`Pawn #${n} acheté sur ${plan.venue} par ${buyer.voice ? `la voix #${n}` : "un wallet neuf"} (${buyer.publicKey.toBase58()}).`);
+        log.info(`Pawn #${n} acheté sur ${plan.venue} par un wallet neuf (${buyer.publicKey.toBase58()}).`);
         return pawnResult(confirmed, pending);
       } finally {
         forget(buyer.keypair);
