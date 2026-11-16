@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import { loadConfig, loadGist } from "./config.js";
+import { loadAlert, loadConfig, loadGist } from "./config.js";
+import { makeAlert } from "./alert.js";
 import { log, logTo } from "./log.js";
 import { openLedger } from "./ledger.js";
 import { makePrice } from "./price.js";
@@ -34,10 +35,28 @@ try {
   }
 } catch (e) { log.error(`Publication en ligne désactivée : ${e.message}`); }
 
+// Phone alert through healthchecks.io (optional, README §12). A problem here never stops the router.
+let alert = null;
+try {
+  const a = cfg.testRun ? null : loadAlert(cfg.real);
+  if (a?.asleep) log.info("Alerte téléphone en veille : elle ne marche pas en dry_run (ALERT_DRY_RUN=oui pour la tester).");
+  else if (a) {
+    if (a.warning) log.warn(a.warning);
+    alert = makeAlert(a, () => health());
+  }
+} catch (e) { log.error(`Alerte téléphone désactivée : ${e.message}`); }
+
+// Refuses to start: one clear line, and the phone alert says why at once (rather than through the silence).
+async function refuse(msg) {
+  log.error(msg);
+  await alert?.stop(`le router $PAWNS refuse de démarrer. ${msg}`);
+  process.exit(1);
+}
+
 // Startup problems (bad key, RPC down, unknown mint...) end with one clear line, not a stack trace.
 async function must(step) {
   try { return await step(); }
-  catch (e) { log.error(e.message); process.exit(1); }
+  catch (e) { await refuse(e.message); }
 }
 
 const price = makePrice(cfg.solUsdFallback);
@@ -57,16 +76,14 @@ if (!L.router) {
   ledger.pushHistory(Date.now());
   ledger.save();
 } else if (L.router !== routerAddress) {
-  log.error(`Le ledger (${cfg.ledgerFile}) appartient au router ${L.router}, pas à ${routerAddress}.` +
+  await refuse(`Le ledger (${cfg.ledgerFile}) appartient au router ${L.router}, pas à ${routerAddress}.` +
     (cfg.real ? " Vérifie ROUTER_SECRET_KEY." : " Lance « npm run reset-dry-run » pour repartir de zéro."));
-  process.exit(1);
 }
 // One ledger, one coin: the books of another coin (a test coin) never count toward this one.
 if (cfg.real && !L.mint) { L.mint = cfg.mint; ledger.save(); }
 else if (cfg.real && L.mint !== cfg.mint) {
-  log.error(`Le ledger (${cfg.ledgerFile}) appartient au coin ${L.mint}, pas à ${cfg.mint} (MINT). ` +
+  await refuse(`Le ledger (${cfg.ledgerFile}) appartient au coin ${L.mint}, pas à ${cfg.mint} (MINT). ` +
     "Range ce ledger dans data\\archive\\ avant de lancer le router sur un autre coin.");
-  process.exit(1);
 }
 function recordPawn(r) {
   const pawn = ledger.addPawn({
@@ -111,9 +128,41 @@ async function settlePending() {
   }
 }
 
+// The same for a claim: booked with its real numbers if it landed, as creator fees. Without this, the next
+// balance check would see the claimed SOL in the router and book it as a deposit.
+function bookClaim(r) {
+  ledger.addClaim({ at: r.at ?? Date.now(), receivedLamports: r.receivedLamports, feeLamports: r.feeLamports, tx: r.tx });
+}
+async function settlePendingClaim() {
+  const pc = L.pendingClaim;
+  if (!pc) return true;
+  if (!chain.recoverClaim) { L.pendingClaim = null; ledger.save(); return true; }
+  try {
+    const r = await chain.recoverClaim(pc);
+    if (L.claims.some((c) => c.tx === pc.signature)) log.info("Le dernier claim était déjà au ledger.");
+    else if (r?.claim) {
+      bookClaim(r.claim);
+      log.info(`Le dernier claim est bien passé : +${toSol(r.claim.receivedLamports)} SOL de creator fees (frais réseau ${toSol(r.claim.feeLamports)} SOL), inscrit au ledger.${solscan(pc.signature)}`);
+    } else if (r?.feeLamports) {
+      ledger.addNetworkCost({ at: Date.now(), lamports: r.feeLamports, tx: pc.signature, why: "claim transaction failed on-chain" });
+      log.warn(`Le dernier claim a échoué on-chain : seuls les frais (${toSol(r.feeLamports)} SOL) sont partis.${solscan(pc.signature)}`);
+    } else log.info("Le dernier claim n'est jamais passé : rien n'a été reçu ni dépensé.");
+    L.pendingClaim = null;
+    ledger.save();
+    return true;
+  } catch (e) {
+    log.error(`Impossible de savoir si le dernier claim est passé (${e.message}). Relance le router plus tard : il revérifiera.`);
+    return false;
+  }
+}
+
 if (L.pending) {
   log.warn("Un pawn était en cours au dernier arrêt : je vérifie où il en est.");
-  if (!(await settlePending())) process.exit(1);
+  if (!(await settlePending())) await refuse("Le pawn en cours au dernier arrêt n'a pas pu être vérifié (erreur ci-dessus).");
+}
+if (L.pendingClaim) {
+  log.warn("Un claim était en cours au dernier arrêt : je vérifie où il en est.");
+  if (!(await settlePendingClaim())) await refuse("Le claim en cours au dernier arrêt n'a pas pu être vérifié (erreur ci-dessus).");
 }
 log.info(`Router : ${routerAddress} · ${L.pawns.length} pawns au compteur.`);
 
@@ -140,7 +189,7 @@ async function checkRouterTokens(atStart) {
   const held = await chain.routerTokens();
   if (!held) { clearWarn("routerTokens"); return; }
   const msg = `Le router détient ${uiTokens(held)} $PAWNS, sans doute le dev buy : transfère-les vers DEV_BAG_WALLET${cfg.devBagWallet ? ` (${cfg.devBagWallet})` : ""} avant de démarrer ; les pawns n'en ont pas besoin.`;
-  if (atStart && cfg.mode === "live") { log.error(msg + " Le mode live refuse de démarrer tant que c'est le cas."); process.exit(1); }
+  if (atStart && cfg.mode === "live") await refuse(msg + " Le mode live refuse de démarrer tant que c'est le cas.");
   warnOnce("routerTokens", msg);
 }
 const spacingMs = 60_000 / cfg.maxPawnsPerMin;
@@ -150,7 +199,7 @@ const warnOnce = (key, msg) => { if (!t.warned[key]) log.warn(msg); t.warned[key
 const clearWarn = (key) => { t.warned[key] = false; };
 
 try { await checkRouterTokens(true); }
-catch (e) { if (cfg.mode === "live") { log.error(`Solde $PAWNS du router illisible (${e.message}) : le mode live ne démarre pas sans cette vérification.`); process.exit(1); } log.warn(`Solde $PAWNS du router illisible : ${e.message}`); }
+catch (e) { if (cfg.mode === "live") await refuse(`Solde $PAWNS du router illisible (${e.message}) : le mode live ne démarre pas sans cette vérification.`); log.warn(`Solde $PAWNS du router illisible : ${e.message}`); }
 await refreshDevBag();
 t.lastDevAt = Date.now();
 
@@ -167,7 +216,10 @@ async function refreshBalance() {
   t.routerLamports = await chain.routerLamports();
   t.lastBalanceAt = Date.now();
   const diff = t.routerLamports - ledger.expectedRouterLamports();
-  if (diff > 5000) {
+  // A claim still being checked: the extra SOL is probably its creator fees, so it is not booked as a deposit.
+  if (diff > 5000 && L.pendingClaim) {
+    warnOnce("pendingClaim", `${toSol(diff)} SOL en plus dans le router, sans doute le claim en cours de vérification : pas compté comme dépôt.`);
+  } else if (diff > 5000) {
     ledger.addDeposit(diff);
     ledger.save();
     log.info(`Dépôt dans le router : ${toSol(diff)} SOL (compté comme dépôt, pas comme creator fees).`);
@@ -184,10 +236,12 @@ async function doClaim(previewOnly) {
   // An empty router can't even pay a simulated fee: say it once, rather than an error every few minutes.
   if (cfg.real && t.routerLamports === 0) { warnOnce("emptyRouter", "Le router n'a pas de SOL : pas de simulation de claim tant qu'il n'a pas reçu son buffer gas."); return; }
   clearWarn("emptyRouter");
-  const p = await chain.previewClaim();
+  let p;
+  try { p = await chain.previewClaim(); }
+  catch (e) { alert?.fail("claim", e.message); throw e; }
   const now = Date.now();
   t.claim = { pendingLamports: p.pendingLamports, checkedAt: now };
-  if (previewOnly) return;
+  if (previewOnly) { alert?.ok("claim"); return; }
   const pendingUsd = toSol(p.pendingLamports) * price.usd;
   const lastAt = L.claims.at(-1)?.at ?? L.startedAt;
   let why = "";
@@ -197,11 +251,31 @@ async function doClaim(previewOnly) {
   }
   if (!why) {
     log.info(`Claim : ${toSol(p.pendingLamports).toFixed(6)} SOL en attente dans pump.fun (≈ ${round(pendingUsd, 2)} $), on attend ${cfg.claimMinUsd} $.`);
+    alert?.ok("claim");
     return;
   }
-  const r = await chain.claim(p);
-  ledger.addClaim({ at: Date.now(), receivedLamports: r.receivedLamports, feeLamports: r.feeLamports, tx: r.tx });
+  let r;
+  try {
+    r = await chain.claim({ ...p, onPending: (info) => { L.pendingClaim = info; ledger.save(); } });
+  } catch (e) {
+    if (!L.pendingClaim) {
+      // Refused before anything was sent (blockhash, signature, RPC): nothing spent. Next try at the next check.
+      log.warn(`Claim pas envoyé, rien n'est parti : ${e.message}`);
+      alert?.fail("claim", `claim pas envoyé : ${e.message}`);
+      return;
+    }
+    log.error(`Claim envoyé mais pas confirmé (${e.message}) : je vérifie s'il est passé.`);
+    if (!(await settlePendingClaim())) {
+      t.halted = true;
+      log.error("Plus de claims ni de pawns tant que ce claim n'est pas tiré au clair. Relance le router : il revérifiera au démarrage.");
+    }
+    await refreshBalance();
+    return;
+  }
+  L.pendingClaim = null;
+  bookClaim(r);
   ledger.save();
+  alert?.ok("claim");
   t.claim = { pendingLamports: 0, checkedAt: Date.now() };
   log.info(`Claim (${why}) : +${toSol(r.receivedLamports)} SOL de creator fees (frais réseau ${toSol(r.feeLamports)} SOL).${solscan(r.tx)}`);
   if (cfg.devSharePct > 0) {
@@ -235,10 +309,12 @@ async function maybeSpawn() {
     recordPawn(r);
     ledger.save();
     t.failures = 0;
+    alert?.ok("pawn");
   } catch (e) {
     if (!L.pending) {
       // Refused before anything was sent (simulation, checks, RPC): nothing spent. Try again in a minute.
       log.warn(`Pawn pas créé, rien n'a été envoyé : ${e.message} Nouvel essai dans 1 min.`);
+      alert?.fail("pawn", e.message);
       t.lastPawnAt = Date.now() + 60_000;
     } else {
       t.failures++;
@@ -254,7 +330,10 @@ async function maybeSpawn() {
 }
 
 async function doCheck() {
-  const balances = await chain.pawnBalances(L.pawns);
+  let balances;
+  try { balances = await chain.pawnBalances(L.pawns); }
+  catch (e) { alert?.fail("check", e.message); throw e; }
+  alert?.ok("check");
   const sold = ledger.applyCheck(Date.now(), balances);
   ledger.save();
   if (sold) log.warn(`Vérification : ${sold} pawn(s) sur ${L.pawns.length} ont un solde en baisse !`);
@@ -273,6 +352,19 @@ function publish() {
   publisher?.offer(state);
   t.lastState = state;
   t.lastWriteAt = Date.now();
+}
+
+// For the phone alert (src/alert.js): in a few words what the router is doing, and what keeps it from working.
+const bootAt = Date.now();
+function health() {
+  const line = `${isPaused() ? "en pause" : cfg.mode} · ${L.pawns.length} pawn${L.pawns.length > 1 ? "s" : ""} · router ${toSol(t.routerLamports)} SOL`;
+  const pub = publisher?.trouble;
+  let problem = "";
+  if (t.halted) problem = "Il s'est mis en pause tout seul (disjoncteur, ou une transaction à tirer au clair) : plus de claims ni de pawns. Lis les erreurs dans sa fenêtre, puis relance-le.";
+  else if (cfg.mode === "live" && t.lastBalanceAt && t.routerLamports === 0) problem = "Il n'a plus de SOL : ni claim ni pawn possible. Envoie-lui son buffer gas.";
+  else if (cfg.mode === "live" && !price.fresh && Date.now() - bootAt > 10 * 60_000) problem = "Prix du SOL introuvable depuis plus de 10 min (Jupiter et CoinGecko) : plus de nouveaux pawns.";
+  else if (pub && Date.now() - pub.since >= 30 * 60_000) problem = `La publication du state.json sur le Gist échoue depuis plus de 30 min (${pub.why}) : le site public n'est plus à jour.`;
+  return { line, problem };
 }
 
 async function tick() {
@@ -306,13 +398,14 @@ while (!t.stopping) {
   const p = isPaused();
   if (p !== wasPaused && wasPaused !== null) log.info(p ? "Router en pause : plus de claims ni de pawns." : "Pause levée : le router reprend.");
   wasPaused = p;
-  try { await tick(); }
-  catch (e) { log.error(e.message); }
+  try { await tick(); alert?.turn(true); }
+  catch (e) { log.error(e.message); alert?.turn(false, e.message); }
   await sleep(1000);
 }
 ledger.save();
 publish();
 await publisher?.flush(t.lastState);
+await alert?.stop("le router $PAWNS a été arrêté à la main (Ctrl+C) : plus de claims ni de pawns tant qu'il n'est pas relancé.");
 server?.close();
 log.info("Router arrêté. Ledger et state.json sauvegardés.");
 process.exit(0);

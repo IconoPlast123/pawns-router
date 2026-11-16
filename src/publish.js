@@ -44,6 +44,7 @@ export async function sendToGist(gist, state) {
 // A failed send is logged and retried later, waiting longer each time (up to 30 min).
 export function makePublisher(gist) {
   let lastKey = "", lastSentAt = 0, nextTryAt = 0, backoffMs = 0, inFlight = null, announced = false, failing = false;
+  let failingSince = 0, lastWhy = "";
 
   // What counts as a change: everything but the timestamps and what the SOL price alone moves.
   function keyOf(state) {
@@ -67,8 +68,11 @@ export function makePublisher(gist) {
         if (!r.public) log.warn("Ce Gist est secret : le site le lira quand même, mais un Gist public est plus transparent.");
       } else if (failing) log.info("Publication en ligne rétablie.");
       failing = false;
+      failingSince = 0;
     } catch (e) {
+      if (!failing) failingSince = now;
       failing = true;
+      lastWhy = e.message;
       backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs ? backoffMs * 2 : Math.max(30_000, gist.everyMs));
       nextTryAt = now + backoffMs;
       const wait = backoffMs < 60_000 ? `${Math.round(backoffMs / 1000)} s` : `${Math.round(backoffMs / 60_000)} min`;
@@ -77,6 +81,9 @@ export function makePublisher(gist) {
   }
 
   return {
+    // For the phone alert: since when sends keep failing, and why (null while they work).
+    get trouble() { return failing ? { since: failingSince, why: lastWhy } : null; },
+
     // Called after every local write of state.json. Never waits for GitHub.
     offer(state) {
       if (inFlight) return;

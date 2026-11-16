@@ -112,6 +112,31 @@ export function openLive(cfg) {
     };
   }
 
+  // A confirmed claim, turned into the ledger's numbers: what the router gained, plus the fee it paid.
+  function claimResult(confirmed, signature) {
+    const fee = confirmed.meta.fee;
+    return {
+      receivedLamports: deltaOf(confirmed, router.publicKey) + fee, feeLamports: fee, tx: signature,
+      at: (confirmed.blockTime ?? Date.now() / 1000) * 1000
+    };
+  }
+
+  // After a crash or a timeout: did a sent transaction land? Waits until its blockhash expires to be sure.
+  // Returns { confirmed, failed } if it landed (failed = it landed but failed on-chain), null if it never landed.
+  // The block height is read before the status: past lastValidBlockHeight with no status, it can no longer land.
+  async function landed(pending) {
+    for (let i = 0; i < 60; i++) {
+      const expired = (await connection.getBlockHeight("confirmed")) > pending.lastValidBlockHeight;
+      const { value: [st] } = await connection.getSignatureStatuses([pending.signature], { searchTransactionHistory: true });
+      if (st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) {
+        return { confirmed: await fetchTx(pending.signature), failed: !!st.err };
+      }
+      if (!st && expired) return null;
+      await sleep(3000);
+    }
+    throw new Error(`statut de ${pending.signature} toujours inconnu`);
+  }
+
   // A router-only transaction (lookup table upkeep): checked, simulated, signed, sent, its cost booked.
   async function routerTx(instructions, why) {
     const tx = compile(instructions);
@@ -236,11 +261,21 @@ export function openLive(cfg) {
     },
 
     // Sends a claim the router decided on (previewClaim, then the CLAIM_MIN_USD / CLAIM_MAX_WAIT_H rule).
-    async claim({ tx }) {
+    // Like a pawn, its signature is handed to onPending (and saved in the ledger) before anything is sent.
+    async claim({ tx, onPending }) {
       const s = await sign(tx);
+      onPending?.({ signature: s.signature, lastValidBlockHeight: s.lastValidBlockHeight, at: Date.now() });
       const confirmed = await sendAndConfirm(tx, s);
-      const fee = confirmed.meta.fee;
-      return { receivedLamports: deltaOf(confirmed, router.publicKey) + fee, feeLamports: fee, tx: s.signature };
+      return claimResult(confirmed, s.signature);
+    },
+
+    // After a crash or a timeout: did the claim land? Returns { claim } with its real numbers if it did,
+    // { feeLamports } if it landed but failed on-chain, null if it never landed.
+    async recoverClaim(pending) {
+      const r = await landed(pending);
+      if (!r) return null;
+      if (r.failed) return { feeLamports: r.confirmed.meta.fee };
+      return { claim: claimResult(r.confirmed, pending.signature) };
     },
 
     // One pawn = one transaction with two signatures, plus the pawn's token account rent.
@@ -295,17 +330,10 @@ export function openLive(cfg) {
     // Returns { pawn } if it landed, { feeLamports } if it landed but failed, null if it never landed.
     // A fresh buyer's key is not needed for this: a confirmed transaction leaves nothing in it.
     async recoverPending(pending) {
-      for (let i = 0; i < 60; i++) {
-        const { value: [st] } = await connection.getSignatureStatuses([pending.signature], { searchTransactionHistory: true });
-        if (st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) {
-          const confirmed = await fetchTx(pending.signature);
-          if (st.err) return { feeLamports: confirmed.meta.fee };
-          return { pawn: pawnResult(confirmed, pending) };
-        }
-        if (!st && (await connection.getBlockHeight("confirmed")) > pending.lastValidBlockHeight) return null;
-        await sleep(3000);
-      }
-      throw new Error(`statut de ${pending.signature} toujours inconnu`);
+      const r = await landed(pending);
+      if (!r) return null;
+      if (r.failed) return { feeLamports: r.confirmed.meta.fee };
+      return { pawn: pawnResult(r.confirmed, pending) };
     },
 
     // Raw token balance of each pawn's token account (0 if the account is gone).

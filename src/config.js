@@ -41,6 +41,27 @@ export function loadGist() {
     api: (process.env.GIST_API_URL ?? "").trim() || "https://api.github.com"
   };
 }
+// The phone alert (optional, README §12): the healthchecks.io address the router sends its signs of life to.
+// Someone who has it could fake them: it is kept like a secret, in a file outside any synced folder.
+// real = false (dry run): only with ALERT_DRY_RUN=oui, to test it; after the launch, a simulation must never
+// send signs of life in the real router's place. Otherwise { asleep: true } when an address is set.
+export function loadAlert(real = true) {
+  if (!str("ALERT_URL_FILE") && !str("ALERT_URL")) return null;
+  if (!real && str("ALERT_DRY_RUN").toLowerCase() !== "oui") return { asleep: true };
+  const u = readSecret("ALERT_URL", "ALERT_URL_FILE", "L'adresse de l'alerte (healthchecks.io)");
+  const url = u.secret.replace(/\/+$/, "");
+  if (!url) return null;
+  if (!/^https:\/\/[^\s/]+\/\S+$/i.test(url) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/\S+$/i.test(url)) {
+    throw new Error("L'adresse de l'alerte doit ressembler à https://hc-ping.com/… (copie-la depuis la page de ton check sur healthchecks.io).");
+  }
+  if (/\/(fail|start|log|\d+)$/i.test(url)) throw new Error("L'adresse de l'alerte doit être celle du signe de vie, sans /fail, /start, /log ni chiffre à la fin.");
+  return {
+    url, warning: u.warning,
+    everyMs: num("ALERT_EVERY_SEC", 60, { min: 20, max: 3600 }) * 1000,
+    fails: num("ALERT_FAILS", 3, { min: 1, max: 100 }),
+    stuckMs: num("ALERT_STUCK_MIN", 10, { min: 1, max: 1440 }) * 60_000
+  };
+}
 const MODES = ["dry_run", "live", "paused"];
 
 function num(name, def, { min = 0, max = Infinity } = {}) {

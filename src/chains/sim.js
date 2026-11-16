@@ -11,6 +11,13 @@ const DECIMALS = 6;
 const SUPPLY_RAW = 1e9 * 10 ** DECIMALS;
 const PUMP_FEE = 0.0125; // pump.fun fee taken from each buy, roughly
 
+// To test the phone alert (README §12): SIM_FAIL=claim,pawn,balance makes these simulated steps fail on purpose.
+function simFail(what) {
+  if ((process.env.SIM_FAIL ?? "").split(",").map((s) => s.trim().toLowerCase()).includes(what)) {
+    throw new Error(`Simulation ratée exprès (SIM_FAIL=${what}, test de l'alerte).`);
+  }
+}
+
 const freshAddress = () => base58(crypto.generateKeyPairSync("ed25519").publicKey.export({ format: "der", type: "spki" }).subarray(-32));
 const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
 
@@ -52,7 +59,7 @@ export function openSim(cfg, price) {
       return { routerAddress: S.router };
     },
 
-    async routerLamports() { return S.routerLamports; },
+    async routerLamports() { simFail("balance"); return S.routerLamports; },
 
     // Simulated dev bag: a made-up address holding 2 % of the supply (the dev buy), so the site can show it.
     async routerTokens() { return 0; },
@@ -63,6 +70,7 @@ export function openSim(cfg, price) {
 
     // Same shape as live: what waits in the (fake) pump.fun vault, and whether a claim pays for itself 10 times.
     async previewClaim() {
+      simFail("claim");
       accrue();
       save();
       return { pendingLamports: S.vaultLamports, gainLamports: S.vaultLamports - txFee, worthIt: S.vaultLamports >= 11 * txFee };
@@ -82,6 +90,7 @@ export function openSim(cfg, price) {
 
     // Like live: every pawn bought by a fresh wallet. Buyers here are made-up addresses, so the site can show them.
     async spawnPawn({ n, buyLamports }) {
+      simFail("pawn");
       const { rentLamports, networkLamports } = this.costEstimate();
       const cost = buyLamports + rentLamports + networkLamports;
       if (S.routerLamports < cost) throw new Error("Router simulé à court de SOL.");
